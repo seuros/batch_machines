@@ -1,0 +1,13 @@
+module BatchMachines
+  VERSION: String
+  class Batch
+    def self.new: (Integer capacity, Integer max_wait_ns) -> instance
+    def configure_pid: (Float | Integer p, Float | Integer i, Float | Integer d) -> nil
+    def push: (Integer now_ns) -> String
+    def poll: (Integer now_ns) -> String?
+    def flush: (Integer now_ns) -> Integer?
+    def adapt: (Float | Integer error, Integer elapsed_ns) -> Integer?
+    def pending: () -> Integer
+    def target: () -> Integer
+  end
+end
