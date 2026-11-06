@@ -7,6 +7,8 @@ license.workspace = true
 description = "Bounded size/deadline batching with explicit feedback adaptation"
 readme = "README.md"
 exclude = ["src/**/tests.rs", "tests/"]
+keywords = ["batching", "backpressure", "latency", "adaptive", "no-std"]
+categories = ["no-std", "algorithms"]
 [dependencies]
 flow-machines.workspace = true
 feedback-machines.workspace = true
