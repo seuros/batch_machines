@@ -32,6 +32,7 @@ pub enum Admission {
 #[derive(Debug)]
 pub struct Batch {
     credits: CreditWindow,
+    items: u32,
     target: NonZeroU32,
     max_wait: Duration,
     deadline: Option<Duration>,
@@ -47,6 +48,7 @@ impl Batch {
         }
         Some(Self {
             credits: CreditWindow::new(capacity),
+            items: 0,
             target: capacity,
             max_wait,
             deadline: None,
@@ -54,18 +56,26 @@ impl Batch {
         })
     }
 
-    /// Account one item; the caller stores its payload only on acceptance.
+    /// Account one item of cost 1; the caller stores its payload only on acceptance.
     #[must_use]
     pub fn push(&mut self, now: Duration) -> Admission {
+        self.push_weighted(now, NonZeroU32::MIN)
+    }
+
+    /// Account one item costing `cost` capacity units; the caller stores its
+    /// payload only on acceptance.
+    #[must_use]
+    pub fn push_weighted(&mut self, now: Duration, cost: NonZeroU32) -> Admission {
         if !self.observe(now) {
             return Admission::Rejected;
         }
         let Some(deadline) = self.deadline.or_else(|| now.checked_add(self.max_wait)) else {
             return Admission::Rejected;
         };
-        if !self.credits.try_acquire(NonZeroU32::MIN) {
+        if !self.credits.try_acquire(cost) {
             return Admission::Full;
         }
+        self.items += 1;
         self.deadline = Some(deadline);
         self.reason(now)
             .map_or(Admission::Buffered, Admission::Flush)
@@ -88,15 +98,16 @@ impl Batch {
         if !self.observe(now) {
             return None;
         }
-        let count = self.credits.in_flight();
-        if let Some(count) = NonZeroU32::new(count) {
-            assert!(self.credits.release(count));
+        if let Some(cost) = NonZeroU32::new(self.credits.in_flight()) {
+            assert!(self.credits.release(cost));
         }
+        let count = self.items;
+        self.items = 0;
         self.deadline = None;
         Some(count)
     }
 
-    /// Interpret finite PID output as a target item count, clamped to capacity.
+    /// Interpret finite PID output as a target cost, clamped to capacity.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn adapt(&mut self, pid: &mut Pid, error: f64, elapsed: Duration) -> Option<u32> {
         let output = pid.step(error, elapsed)?;
@@ -108,13 +119,28 @@ impl Batch {
     /// Number of accepted items not yet acknowledged by `flush`.
     #[must_use]
     pub const fn pending(&self) -> u32 {
+        self.items
+    }
+
+    /// Capacity units held by pending items.
+    #[must_use]
+    pub const fn pending_cost(&self) -> u32 {
         self.credits.in_flight()
     }
 
-    /// Current target size; capacity remains the hard admission limit.
+    /// Current target cost; capacity remains the hard admission limit.
     #[must_use]
     pub const fn target(&self) -> u32 {
         self.target.get()
+    }
+
+    /// Absolute time at which `poll` first reports `Deadline`, while items are pending.
+    #[must_use]
+    pub const fn deadline(&self) -> Option<Duration> {
+        if self.items == 0 {
+            return None;
+        }
+        self.deadline
     }
 
     fn reason(&self, now: Duration) -> Option<FlushReason> {
