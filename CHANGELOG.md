@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/seuros/batch_machines/compare/batch_machines/v0.1.3...batch_machines/v0.1.4) (2026-11-06)
+
+
+### Features
+
+* expose the pending deadline and weighted pushes ([9044fa3](https://github.com/seuros/batch_machines/commit/9044fa323859bcd6fb6cf9a7b5c884bf503fedc4))
+
 ## [0.1.3](https://github.com/seuros/batch_machines/compare/batch_machines/v0.1.2...batch_machines/v0.1.3) (2026-11-06)
 
 
