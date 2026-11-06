@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/seuros/batch_machines/compare/batch-machines-v0.2.1...batch-machines-v0.2.2) (2026-11-06)
+
+
+### Bug Fixes
+
+* crates.io keywords and categories for the core ([b150571](https://github.com/seuros/batch_machines/commit/b150571563871f7af013b716402aa169688deaf2))
+
 ## [0.2.1](https://github.com/seuros/batch_machines/compare/batch-machines-v0.2.0...batch-machines-v0.2.1) (2026-11-06)
 
 
