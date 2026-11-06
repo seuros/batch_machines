@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 description = "Bounded size/deadline batching with explicit feedback adaptation"
 readme = "README.md"
+exclude = ["src/**/tests.rs", "tests/"]
 [dependencies]
 flow-machines.workspace = true
 feedback-machines.workspace = true
