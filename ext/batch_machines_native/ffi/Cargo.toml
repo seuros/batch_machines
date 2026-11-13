@@ -13,7 +13,6 @@ doctest = false
 
 [dependencies]
 batch-machines.workspace = true
-feedback-machines.workspace = true
 magnus.workspace = true
 rb-sys.workspace = true
 

@@ -1,13 +1,86 @@
+# Time is Integer nanoseconds on a monotonic clock, instants and spans alike:
+# TypeError for a non-Integer, RangeError outside 0..2**64-1. Capacity and
+# cost are Integers in 1..2**32-1: TypeError for anything else, RangeError
+# outside the range. A frozen batch raises FrozenError on every mutating
+# call. Refusals are symbols, one per core `Refusal` variant; they never
+# raise, and a refused call changes nothing, not even the observed clock.
 module BatchMachines
   VERSION: String
+
+  # The core's `Refusal`.
+  # :time_regression, `now` is earlier than the latest observed instant.
+  # :overflow, a term of the controller's calculation is not finite.
+  # :full, the item costs more than the capacity still unspent.
+  # :not_finite, the error or output is NaN or infinite.
+  # :invalid_duration, the elapsed time is zero.
+  type refusal = :time_regression | :overflow | :full | :not_finite | :invalid_duration
+
+  # The core's `FlushReason`.
+  type flush_reason = :size | :deadline
+
+  # The core's `Admission::Flush(FlushReason)`: counted, and a flush is due.
+  class Flush < Data
+    attr_reader reason: flush_reason
+    def self.new: (flush_reason reason) -> Flush
+                | (reason: flush_reason) -> Flush
+  end
+
+  # The core's `Admission`: `Buffered` is :buffered, `Flush(reason)` a Flush.
+  type admission = :buffered | Flush
+
+  # A FeedbackMachines::Pid, or anything whose `step` answers as it does: a
+  # Float output, or :not_finite, :invalid_duration or :overflow.
+  interface _Controller
+    def step: (Numeric error, Integer elapsed) -> (Float | :not_finite | :invalid_duration | :overflow)
+  end
+
+  # The core's `Batch`.
   class Batch
-    def self.new: (Integer capacity, Integer max_wait_ns) -> instance
-    def configure_pid: (Float | Integer p, Float | Integer i, Float | Integer d) -> nil
-    def push: (Integer now_ns) -> String
-    def poll: (Integer now_ns) -> String?
-    def flush: (Integer now_ns) -> Integer?
-    def adapt: (Float | Integer error, Integer elapsed_ns) -> Integer?
+    # The core's `Batch::new(capacity, max_wait)`; the target starts at
+    # capacity. Raises RangeError for a zero max_wait (the core's `None`).
+    def self.new: (Integer capacity, Integer max_wait) -> Batch
+
+    # The core's `push(now)`: `push_weighted(now, 1)`.
+    # Honoured: :buffered or a Flush; the item is counted either way.
+    # Refused: :time_regression, :full. The core's third push refusal,
+    # `Overflow` (`now + max_wait` does not fit a Duration), cannot happen
+    # here: Integer nanoseconds stop at 2**64-1, far below that limit.
+    def push: (Integer now) -> (admission | :time_regression | :full)
+
+    # The core's `push_weighted(now, cost)`.
+    # Honoured: :buffered or a Flush; the item is counted either way.
+    # Refused: :time_regression, :full (and never :overflow, as for `push`).
+    def push_weighted: (Integer now, Integer cost) -> (admission | :time_regression | :full)
+
+    # The core's `poll(now)`. Honoured: :size or :deadline when a flush is
+    # due, nil when nothing is due. Refused: :time_regression.
+    def poll: (Integer now) -> (flush_reason | nil | :time_regression)
+
+    # The core's `flush(now)`. Honoured: the items that were pending, 0 for
+    # an empty batch. Refused: :time_regression. Never nil.
+    def flush: (Integer now) -> (Integer | :time_regression)
+
+    # The core's `adapt(pid, error, elapsed)`: steps the caller's controller
+    # once (`pid.step(error, elapsed)`) and retargets to its output.
+    # Honoured: the new target. Refused: :not_finite, :invalid_duration,
+    # :overflow, as the controller answered them; nothing changed. Never nil.
+    # Raises TypeError for a non-number error, a non-Integer elapsed, or a
+    # `step` that answers anything else; RangeError for an elapsed outside
+    # 0..2**64-1; NoMethodError for an object without `step`.
+    def adapt: (_Controller pid, Numeric error, Integer elapsed) -> (Integer | :not_finite | :invalid_duration | :overflow)
+
+    # The core's `retarget(output)`: the target becomes `output` truncated
+    # and clamped to 1..capacity. Honoured: the new target. Refused:
+    # :not_finite. Never nil. Raises TypeError for a non-number.
+    def retarget: (Numeric output) -> (Integer | :not_finite)
+
+    def capacity: () -> Integer
+    def max_wait: () -> Integer
     def pending: () -> Integer
+    def pending_cost: () -> Integer
     def target: () -> Integer
+
+    # The instant `poll` first answers :deadline; nil while nothing is pending.
+    def deadline: () -> Integer?
   end
 end

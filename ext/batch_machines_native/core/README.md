@@ -19,3 +19,45 @@ zero and clamped to `[1, capacity]`. Error definition, gains,
 measurement, and downstream flush concurrency are caller policies. This cannot
 guarantee an end-to-end latency budget if timers/execution are delayed. No I/O,
 timer driver, payload storage, partial flush, or Ruby binding is included.
+
+## Contract
+
+- **Answers.** Every operation that can refuse returns `Result<T, Refusal>`,
+  and `T` describes only honoured outcomes.
+
+  | Call | Honoured | Refused |
+  | --- | --- | --- |
+  | `Batch::new(capacity, max_wait)` | `Some(Batch)` | `None` for a zero `max_wait` (configuration) |
+  | `push(now)`, `push_weighted(now, cost)` | `Admission::Buffered`, `Admission::Flush(FlushReason)`; the item is counted either way | `TimeRegression`, `Overflow`, `Full` |
+  | `poll(now)` | `Some(FlushReason)`, or `None` when nothing is due | `TimeRegression` |
+  | `flush(now)` | the items that were pending, `0` for an empty batch | `TimeRegression` |
+  | `adapt(pid, error, elapsed)` | the new target | `NotFinite`, `InvalidDuration`, `Overflow` |
+  | `retarget(output)` | the new target | `NotFinite` |
+
+- **Refusals change nothing.** Every `Err` leaves the batch equal to a clone
+  taken before the call: no item counted, no cost held, and the `now` it
+  carried is not observed, so a refused call can never make a later one a
+  `TimeRegression`. A refused `adapt` leaves the controller untouched too.
+- **`Refusal`.** `TimeRegression`: `now` is earlier than the latest instant an
+  honoured `push`, `poll` or `flush` observed. `Overflow`: `now + max_wait`
+  does not fit a `Duration` (only a push that would start a batch computes
+  it), or a term of the PID calculation is not finite. `Full`: the item costs
+  more than the capacity still unspent. `NotFinite`: the error or output is
+  NaN or infinite. `InvalidDuration`: `adapt` was given a zero `elapsed`.
+- **Repeats.** `flush` on an empty batch is honoured and answers `0`; the
+  batch can prove it, because nothing is pending. At the same `now` it changes
+  nothing. A repeated `poll` at the same `now` answers the same and changes
+  nothing. `retarget` to the target already set changes nothing. A push is
+  never a repeat: the batch counts items, it does not know them.
+- **Time.** Instants and spans are `core::time::Duration` on the caller's
+  monotonic clock. The batch reads no clock.
+- **No issued ids.** The batch hands out no handle, so there is no scope and
+  nothing to resume: a restarted batch is `Batch::new` again, empty.
+- **Sibling seams.** `Pid`, `Gains` and `Limits` are `feedback-machines`
+  types, re-exported here because `adapt` names `Pid`. `adapt` steps the
+  caller's controller and aims the target at its output; it is exactly
+  `pid.step(error, elapsed)` followed by `retarget(output)`. It is not named
+  `adapt_from`: that name is for a method that only reads a sibling object,
+  and this one moves the controller's integral and derivative history.
+  `retarget` is the same aiming for a caller that computes the output some
+  other way. The `flow-machines` credit window is private.

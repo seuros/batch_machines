@@ -10,11 +10,12 @@ license = "MIT"
 batch-machines = { path = "ext/batch_machines_native/core" }
 magnus = { version = "0.9.3", default-features = false }
 rb-sys = { version = "0.9.130", default-features = false, features = ["stable-api-compiled-fallback"] }
-flow-machines = ">=0.2"
-feedback-machines = ">=0.2"
+flow-machines = ">=0.3"
+feedback-machines = ">=0.3"
 [workspace.lints.rust]
 unsafe_code = "deny"
 unused_must_use = "warn"
+missing_docs = "warn"
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }

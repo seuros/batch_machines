@@ -6,8 +6,8 @@ Gem::Specification.new do |spec|
   spec.authors = ['Abdelkader Boudih']
   spec.email = ['oss@seuros.com']
   spec.summary = 'Native size/deadline batch decisions with PID adaptation'
-  spec.description = 'Initial native batch policy model. Caller owns payloads and execution. ' \
-                     'Local sibling Rust checkouts required.'
+  spec.description = 'Ruby adapter to the no_std batch-machines Rust core: bounded size/deadline batch ' \
+                     'decisions with a controller-adapted target. Caller owns payloads, clock and execution.'
   spec.homepage = 'https://github.com/seuros/batch_machines'
   spec.license = 'MIT'
   spec.required_ruby_version = '>= 4.0.0'

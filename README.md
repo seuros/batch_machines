@@ -18,12 +18,17 @@ rows = []
 def ingest(batch, rows, row)
   rows << row
   case batch.push(now_ns)
-  when 'size', 'deadline' then insert_all(batch, rows)
+  in :buffered             then nil                      # counted, keep going
+  in BatchMachines::Flush  then insert_all(batch, rows)  # counted, and it's time
+  in :full | :time_regression then rows.pop              # NOT counted
   end
 end
 
 def tick(batch, rows)
-  insert_all(batch, rows) if batch.poll(now_ns)
+  case batch.poll(now_ns)
+  in :size | :deadline then insert_all(batch, rows)
+  in nil | :time_regression then nil
+  end
 end
 
 def insert_all(batch, rows)
@@ -88,15 +93,15 @@ sequenceDiagram
     participant DB
 
     App->>Batch: push(t=0ms)
-    Batch-->>App: buffered
+    Batch-->>App: :buffered
     App->>Batch: push(t=20ms)
-    Batch-->>App: buffered
+    Batch-->>App: :buffered
     App->>Batch: push(t=45ms)
-    Batch-->>App: buffered
+    Batch-->>App: :buffered
     Note over Batch: oldest arrived at 0ms, max wait 50ms
 
     App->>Batch: poll(t=50ms)
-    Batch-->>App: deadline
+    Batch-->>App: :deadline
     App->>DB: INSERT 3 rows
     App->>Batch: flush(t=51ms)
     Batch-->>App: 3
@@ -107,18 +112,31 @@ sequenceDiagram
 
 ### Push
 
-Every arrival is a `push` with the current time. The return value is a String telling you what to do.
+Every arrival is a `push` with the current time. The answer tells you what happened and what to do.
 
 ```ruby
 batch = BatchMachines::Batch.new(2, 10)
 
-batch.push(1)    # => "buffered"   room left, no reason to send
-batch.push(2)    # => "size"       target reached, send now
-batch.push(3)    # => "full"       capacity reached, this one was NOT accepted
+batch.push(1)    # => :buffered                   room left, no reason to send
+batch.push(2)    # => #<data Flush reason=:size>  target reached, send now
+batch.push(3)    # => :full                       capacity reached, this one was NOT counted
 batch.pending    # => 2
 ```
 
-`"buffered"`, `"size"`, and `"deadline"` all mean the item was counted. `"full"` means it wasn't, and you need to flush before it can be. Keep your own list of payloads alongside, and only append when the push was accepted.
+`:buffered` and a `Flush` both mean the item was counted; `Flush#reason` is `:size` or `:deadline`. `:full` and `:time_regression` are refusals: the item wasn't counted and nothing changed, not even the batch's idea of what time it is. After `:full` you need to flush before it can be. Keep your own list of payloads alongside, and only keep the payload when the push was honoured.
+
+Both honoured answers and refusals are truthy. Don't write `if batch.push(now)`; match on the answer.
+
+Items aren't always the same size. `push_weighted(now, cost)` spends `cost` units of capacity instead of one, so a byte budget flushes at a byte target. `pending` counts items, `pending_cost` counts what they spent.
+
+```ruby
+batch = BatchMachines::Batch.new(1_000, 50_000_000)   # 1000 bytes per flush
+batch.push_weighted(0, 400)    # => :buffered
+batch.push_weighted(1, 700)    # => :full     only 600 left
+batch.push_weighted(1, 600)    # => #<data Flush reason=:size>
+batch.pending                  # => 2
+batch.pending_cost             # => 1000
+```
 
 ### Poll
 
@@ -129,11 +147,12 @@ batch = BatchMachines::Batch.new(100, 50_000_000)
 batch.push(1_000)
 batch.push(40_000_000)
 
-batch.poll(50_000_999)   # => nil         oldest has waited 49.999999ms
-batch.poll(50_001_000)   # => "deadline"  oldest has waited 50ms
+batch.poll(50_000_999)   # => nil        oldest has waited 49.999999ms
+batch.deadline           # => 50_001_000 sleep until then instead of guessing
+batch.poll(50_001_000)   # => :deadline  oldest has waited 50ms
 ```
 
-The deadline belongs to the oldest item and never moves. A new arrival doesn't push it back, and neither does changing the target.
+The deadline belongs to the oldest item and never moves. A new arrival doesn't push it back, and neither does changing the target. `deadline` is the instant `poll` first says `:deadline`, and `nil` while the hold is empty.
 
 ### Flush
 
@@ -153,53 +172,77 @@ When an arrival both fills the target and lands at the deadline, you hear about 
 
 ```ruby
 batch = BatchMachines::Batch.new(2, 10)
-batch.push(0)     # => "buffered"
-batch.push(10)    # => "deadline"
+batch.push(0)     # => :buffered
+batch.push(10)    # => #<data Flush reason=:deadline>
 ```
 
 ### Adapting the target
 
-The target size starts at capacity. If you'd rather it follow conditions downstream, such as insert latency, feed `adapt` an error signal and it moves the target for you, clamped to `1..capacity`. Out of the box it's a proportional controller with gain 1, so the target simply follows the number you give it. The second argument is how much time passed since the last call, in nanoseconds.
+The target size starts at capacity. If you'd rather it follow conditions downstream, such as insert latency, `retarget` moves it: hand it a number and the target becomes that number, truncated and clamped to `1..capacity`.
 
 ```ruby
 batch = BatchMachines::Batch.new(100, 50_000_000)
-batch.target                         # => 100
+batch.target            # => 100
 
-batch.adapt(10, 1_000_000_000)       # => 10
-batch.adapt(-3, 1_000_000_000)       # => 1     never below one
-batch.adapt(1000, 1_000_000_000)     # => 100   never above capacity
+batch.retarget(10)      # => 10
+batch.retarget(-3)      # => 1     never below one
+batch.retarget(1000)    # => 100   never above capacity
 ```
 
-Need memory? `configure_pid(p, i, d)` sets the gains. With only an integral gain the target climbs a little more each call:
+Need memory? Bring a controller. `adapt(pid, error, elapsed)` steps your PID once and retargets to its output. The controller is yours: a `FeedbackMachines::Pid` from [feedback_machines](https://github.com/seuros/feedback_machines), or any object whose `step(error, elapsed)` answers the same way. This gem doesn't depend on that one. It only calls `step`. `elapsed` is the time since the last sample, in nanoseconds.
 
 ```ruby
-batch = BatchMachines::Batch.new(100, 10)
-batch.configure_pid(0, 1.0, 0)
+require 'feedback_machines'
 
-batch.adapt(5.0, 1_000_000_000)   # => 5
-batch.adapt(5.0, 1_000_000_000)   # => 10
-batch.adapt(5.0, 1_000_000_000)   # => 15
+pid = FeedbackMachines::Pid.new(
+  FeedbackMachines::Gains.new(0, 1.0, 0),    # integral only
+  FeedbackMachines::Limits.new(0, 100)
+)
+batch = BatchMachines::Batch.new(100, 10)
+
+batch.adapt(pid, 5.0, 1_000_000_000)   # => 5
+batch.adapt(pid, 5.0, 1_000_000_000)   # => 10
+batch.adapt(pid, 5.0, 1_000_000_000)   # => 15
+batch.adapt(pid, 5.0, 0)               # => :invalid_duration   nothing stepped, target still 15
 ```
 
-Lowering the target doesn't drop anything already in the hold. Items past the target still count, and the next push or poll says `"size"` until you flush.
+Lowering the target doesn't drop anything already in the hold. Items past the target still count, and the next push or poll says size until you flush.
 
 ```ruby
 batch = BatchMachines::Batch.new(5, 10)
 batch.push(0)
-batch.adapt(2.0, 1_000_000_000)   # => 2
-batch.push(1)                     # => "size"
-batch.push(2)                     # => "size"   accepted, still under capacity 5
-batch.pending                     # => 3
+batch.retarget(2)   # => 2
+batch.push(1)       # => #<data Flush reason=:size>
+batch.push(2)       # => #<data Flush reason=:size>   counted, still under capacity 5
+batch.pending       # => 3
 ```
 
 ## The Rules of the Consolidator
 
-- **Capacity is an Integer** in `1...2**32`, and `max_wait_ns` is a positive Integer. Zero for either raises `ArgumentError`.
-- **Time is unsigned 64-bit Integer nanoseconds.** Floats and strings raise `TypeError`, negative or overflow raises `RangeError`.
-- **Time only moves forward.** A `push` with an earlier clock than the last one returns `"rejected"` and counts nothing. `poll` and `flush` with an earlier clock return `nil` and change nothing.
-- **Gains are finite and non-negative.** Infinite, NaN, or negative gains raise `ArgumentError`. An error of infinity or NaN raises too, and `adapt` with zero elapsed raises.
-- **A blown-up controller returns `nil`** and leaves the target where it was, rather than handing you a nonsense size.
-- **Frozen means frozen.** `freeze` the batch and `push`, `poll`, `flush`, `adapt`, and `configure_pid` all raise `FrozenError`.
+- **Ruby mirrors the Rust core.** `Batch.new(capacity, max_wait)` and every method take their arguments positionally, in the core's order. `Admission::Buffered` is `:buffered`, `Admission::Flush(reason)` is a `BatchMachines::Flush` `Data` with a `reason`, and `FlushReason` is `:size` or `:deadline`.
+- **Every answer, by method.**
+
+  | Method | Honoured | Refused |
+  | --- | --- | --- |
+  | `push(now)` | `:buffered` or a `Flush`; the item is counted either way | `:time_regression`, `:full` |
+  | `push_weighted(now, cost)` | `:buffered` or a `Flush`; the item is counted either way | `:time_regression`, `:full` |
+  | `poll(now)` | `:size` or `:deadline`, `nil` when nothing is due | `:time_regression` |
+  | `flush(now)` | the items that were pending (Integer), `0` for an empty hold | `:time_regression` |
+  | `adapt(pid, error, elapsed)` | the new target (Integer) | `:not_finite`, `:invalid_duration`, `:overflow` |
+  | `retarget(output)` | the new target (Integer) | `:not_finite` |
+  | `capacity`, `max_wait`, `pending`, `pending_cost`, `target` | Integer | never refuse |
+  | `deadline` | Integer nanoseconds, `nil` when nothing is pending | never refuses |
+
+  Every refusal has its own symbol; there is no catch-all. `nil` only ever means "nothing due" or "nothing pending".
+- **A refusal never raises and changes nothing.** No item counted, no cost held, the target where it was. The clock a refused call carried is not remembered either, so a refused push can't turn your next call into a `:time_regression`.
+- **Time only moves forward.** `push`, `poll` and `flush` with a clock earlier than the last honoured one answer `:time_regression`.
+- **Flushing an empty hold is honoured** and answers `0`. Do it twice, get `0` twice.
+- **Capacity and cost are Integers** in `1...2**32`. Anything else is `TypeError`, zero or out of range is `RangeError`.
+- **Time is Integer nanoseconds** in `0...2**64`, instants and spans alike. Floats and strings raise `TypeError`, negative or too large raises `RangeError`. A zero `max_wait` raises `RangeError`: the first item would be late on arrival.
+- **The controller is duck-typed.** `adapt` calls `pid.step(error, elapsed)` and expects a Float or one of `:not_finite`, `:invalid_duration`, `:overflow`, which it hands straight back to you. Anything else from `step` is a `TypeError`; an object without `step` is a `NoMethodError`. The error must be a number and `elapsed` an Integer in range, checked before the controller is touched. A refusing controller has not been stepped, so nothing changed on either side.
+- **The Rust core has one more push refusal**, `Overflow`, for a clock so late that the deadline doesn't fit. Integer nanoseconds run out long before that, so Ruby never sees it from a push.
+- **Frozen means frozen.** `freeze` the batch and `push`, `push_weighted`, `poll`, `flush`, `adapt`, and `retarget` all raise `FrozenError`, before any controller is stepped.
+- **No ids, nothing to restore.** The batch hands out no handles. After a restart, build a new one; it starts empty.
 
 ## What You Think You're Doing vs Reality
 

@@ -2,27 +2,45 @@
 mod batch;
 mod init;
 
-use std::time::Duration;
+use std::{num::NonZeroU32, time::Duration};
 
 use magnus::{Error, Integer, Ruby, TryConvert, Value};
 
-#[derive(Clone, Copy)]
-struct Count(u64);
+fn integer(value: Value, message: &'static str) -> Result<(), Error> {
+    if Integer::from_value(value).is_some() {
+        return Ok(());
+    }
+    Err(Error::new(
+        Ruby::get_with(value).exception_type_error(),
+        message,
+    ))
+}
 
-impl TryConvert for Count {
+/// An instant or a span: Integer nanoseconds in `0..2**64`.
+#[derive(Clone, Copy)]
+struct Nanos(Duration);
+
+impl TryConvert for Nanos {
     fn try_convert(value: Value) -> Result<Self, Error> {
-        if Integer::from_value(value).is_none() {
-            return Err(Error::new(
-                Ruby::get_with(value).exception_type_error(),
-                "count/time must be an unsigned 64-bit Integer (time in nanoseconds)",
-            ));
-        }
-        u64::try_convert(value).map(Self)
+        integer(value, "time must be an Integer number of nanoseconds")?;
+        u64::try_convert(value).map(|nanos| Self(Duration::from_nanos(nanos)))
     }
 }
 
-impl Count {
-    const fn duration(self) -> Duration {
-        Duration::from_nanos(self.0)
+/// A capacity or a cost: an Integer in `1..2**32`.
+#[derive(Clone, Copy)]
+struct Cost(NonZeroU32);
+
+impl TryConvert for Cost {
+    fn try_convert(value: Value) -> Result<Self, Error> {
+        integer(value, "capacity and cost must be Integers")?;
+        NonZeroU32::new(u32::try_convert(value)?)
+            .map(Self)
+            .ok_or_else(|| {
+                Error::new(
+                    Ruby::get_with(value).exception_range_error(),
+                    "capacity and cost must be in 1..2**32",
+                )
+            })
     }
 }
