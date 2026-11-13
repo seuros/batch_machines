@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.0](https://github.com/seuros/batch_machines/compare/batch-machines-v0.3.0...batch-machines-v0.4.0) (2026-11-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* converted to the fleet conventions. One exhaustive Refusal per crate, Result from every operation that can refuse, a refusal changes nothing, provable idempotent repeats are honoured, Ruby mirrors the core. No compatibility aliases. Requires flow-machines >= 0.3 and feedback-machines >= 0.3. configure_pid is gone; Ruby answers symbols and a Flush value.
+
+### Features
+
+* answer Result&lt;_, Refusal&gt;, stop refused pushes recording the clock, adapt a caller-owned controller ([a3746a5](https://github.com/seuros/batch_machines/commit/a3746a5c91bf437e38389cb5aee5022b3b760797))
+
 ## [0.3.0](https://github.com/seuros/batch_machines/compare/batch-machines-v0.2.2...batch-machines-v0.3.0) (2026-11-06)
 
 
