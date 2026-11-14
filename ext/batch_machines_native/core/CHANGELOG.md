@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.5.0](https://github.com/seuros/batch_machines/compare/batch-machines-v0.4.0...batch-machines-v0.5.0) (2026-11-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* seal Flush, resolve it at load, re-check frozen before keeping
+
+### Features
+
+* seal Flush, resolve it at load, re-check frozen before keeping ([3cde5ab](https://github.com/seuros/batch_machines/commit/3cde5ab2b43cdd2d30dc10729570f53a705e7d8c))
+
 ## [0.4.0](https://github.com/seuros/batch_machines/compare/batch-machines-v0.3.0...batch-machines-v0.4.0) (2026-11-13)
 
 
