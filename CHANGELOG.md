@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/seuros/batch_machines/compare/batch_machines/v0.5.0...batch_machines/v0.5.1) (2026-11-14)
+
+
+### Bug Fixes
+
+* **deps:** require matryona-machines &gt;= 0.4 ([8737aa0](https://github.com/seuros/batch_machines/commit/8737aa0f16af8ed9362876300d02a7ed5c99251e))
+
 ## [0.5.0](https://github.com/seuros/batch_machines/compare/batch_machines/v0.4.0...batch_machines/v0.5.0) (2026-11-14)
 
 
