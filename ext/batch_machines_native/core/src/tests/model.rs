@@ -1,5 +1,6 @@
 //! Randomized run against a plain reference model.
 use super::*;
+use matryona_machines::testing::XorShift64;
 
 /// The batch, restated without a credit window.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,22 +86,8 @@ impl Model {
     }
 }
 
-struct Rng(u64);
-
-impl Rng {
-    fn next(&mut self) -> u64 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        self.0
-    }
-    fn below(&mut self, bound: u64) -> u64 {
-        self.next() % bound
-    }
-}
-
 /// Near `Duration::MAX` one draw in sixteen, so `Overflow` is reached too.
-fn instant(rng: &mut Rng, clock: u64) -> Duration {
+fn instant(rng: &mut XorShift64, clock: u64) -> Duration {
     match rng.below(16) {
         0 => Duration::MAX,
         1..=3 => at(clock.saturating_sub(rng.below(4))),
@@ -110,7 +97,7 @@ fn instant(rng: &mut Rng, clock: u64) -> Duration {
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 fn run(seed: u64, refusals: &mut [u32; 5], repeats: &mut u32) {
-    let mut rng = Rng(seed);
+    let mut rng = XorShift64::new(seed);
     let capacity = 1 + rng.below(12) as u32;
     let max_wait = at(1 + rng.below(6));
     let mut batch = Batch::new(nz(capacity), max_wait).expect("configuration");

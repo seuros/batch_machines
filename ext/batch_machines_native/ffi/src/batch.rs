@@ -1,30 +1,58 @@
-use std::{cell::RefCell, sync::OnceLock, time::Duration};
+use std::cell::RefCell;
 
 use batch_machines::{Admission, Batch, FlushReason, Refusal};
 use magnus::{
-    Error, Float, RClass, RModule, Ruby, Symbol, TryConvert, Value, function, method, prelude::*,
-    typed_data::Obj, value::Opaque,
+    Error, Float, RModule, Ruby, Symbol, TryConvert, Value, function, method, prelude::*,
+    typed_data::Obj,
+};
+use matryona_machines::ruby::{
+    Class, Registry, Symbols, duration, keep, nanoseconds, positive, symbol,
 };
 
-use crate::{Cost, Nanos};
-
-/// Ruby symbol of a refusal: the snake case of the core variant.
-fn refusal(ruby: &Ruby, refused: Refusal) -> Value {
-    ruby.to_symbol(match refused {
+/// A refusal's symbol name: the snake case of the core variant.
+const fn refusal_name(refused: Refusal) -> &'static str {
+    match refused {
         Refusal::TimeRegression => "time_regression",
         Refusal::Overflow => "overflow",
         Refusal::Full => "full",
         Refusal::NotFinite => "not_finite",
         Refusal::InvalidDuration => "invalid_duration",
-    })
-    .as_value()
+    }
+}
+
+/// Ruby symbol of a refusal.
+fn refusal(ruby: &Ruby, refused: Refusal) -> Value {
+    symbol(ruby, refusal_name(refused)).as_value()
+}
+
+matryona_machines::symbols! {
+    /// Why a batch flushed, as `Flush#reason` holds it.
+    Reasons for FlushReason as "reason" {
+        Size => "size",
+        Deadline => "deadline",
+    }
+}
+
+matryona_machines::symbols! {
+    /// The refusals a `feedback_machines` controller's `step` answers.
+    ControllerRefusals for feedback_machines::Refusal as "step's refusal" {
+        NotFinite => "not_finite",
+        InvalidDuration => "invalid_duration",
+        Overflow => "overflow",
+    }
 }
 
 fn reason(ruby: &Ruby, reason: FlushReason) -> Symbol {
-    ruby.to_symbol(match reason {
-        FlushReason::Size => "size",
-        FlushReason::Deadline => "deadline",
-    })
+    Reasons::symbol(ruby, reason)
+}
+
+/// The controller's refusal as the core's `adapt` carries it.
+const fn controller_refusal(refused: feedback_machines::Refusal) -> Refusal {
+    match refused {
+        feedback_machines::Refusal::NotFinite => Refusal::NotFinite,
+        feedback_machines::Refusal::InvalidDuration => Refusal::InvalidDuration,
+        feedback_machines::Refusal::Overflow => Refusal::Overflow,
+    }
 }
 
 /// A count, or the refusal symbol.
@@ -35,58 +63,32 @@ fn counted(ruby: &Ruby, answer: Result<u32, Refusal>) -> Value {
     }
 }
 
-/// An instant or span as Integer nanoseconds.
-fn nanos(ruby: &Ruby, span: Duration) -> Value {
-    ruby.integer_from_u128(span.as_nanos()).as_value()
-}
-
-fn type_error(ruby: &Ruby, message: &'static str) -> Error {
-    Error::new(ruby.exception_type_error(), message)
-}
-
-fn range_error(ruby: &Ruby, message: &'static str) -> Error {
-    Error::new(ruby.exception_range_error(), message)
-}
-
 /// What `Flush.new` stores: the core's `FlushReason`, as its symbol.
 /// `TypeError` for a non-Symbol, `RangeError` for a symbol that names no
 /// `FlushReason`.
 fn checked_flush(ruby: &Ruby, value: Value) -> Result<Symbol, Error> {
-    let symbol =
-        Symbol::from_value(value).ok_or_else(|| type_error(ruby, "reason must be a Symbol"))?;
-    let due = match symbol.name()?.as_ref() {
-        "size" => FlushReason::Size,
-        "deadline" => FlushReason::Deadline,
-        _ => return Err(range_error(ruby, "reason must be :size or :deadline")),
-    };
+    let due = Reasons::parse(ruby, value)?;
     Ok(reason(ruby, due))
 }
 
 /// `BatchMachines::Flush`, resolved once at init: swapping the constant later
 /// changes nothing the batch builds.
-static FLUSH: OnceLock<Opaque<RClass>> = OnceLock::new();
-
-fn flush_class(ruby: &Ruby) -> Result<RClass, Error> {
-    FLUSH
-        .get()
-        .map(|class| ruby.get_inner(*class))
-        .ok_or_else(|| {
-            Error::new(
-                ruby.exception_runtime_error(),
-                "the batch_machines extension is not initialised",
-            )
-        })
+struct Classes {
+    flush: Class,
 }
+
+static CLASSES: Registry<Classes> = Registry::new("batch_machines");
 
 #[magnus::wrap(class = "BatchMachines::Batch", free_immediately, size)]
 struct Wrapper(RefCell<Batch>);
 
 impl Wrapper {
     /// Raises `RangeError` for a zero `max_wait` (the core answers `None`).
-    fn new(ruby: &Ruby, capacity: Cost, max_wait: Nanos) -> Result<Self, Error> {
-        Batch::new(capacity.0, max_wait.0)
+    fn new(ruby: &Ruby, capacity: Value, max_wait: Value) -> Result<Self, Error> {
+        let capacity = positive(capacity, "capacity")?;
+        Batch::new(capacity, duration(max_wait, "max_wait")?)
             .map(|batch| Self(RefCell::new(batch)))
-            .ok_or_else(|| range_error(ruby, "max_wait must be positive"))
+            .ok_or_else(|| Error::new(ruby.exception_range_error(), "max_wait must be positive"))
     }
 
     /// A push answers with a `Flush` built by Ruby code, so it is counted on
@@ -100,37 +102,35 @@ impl Wrapper {
         act: impl FnOnce(&mut Batch) -> Result<Admission, Refusal>,
     ) -> Result<Value, Error> {
         this.check_frozen()?;
-        let flush = flush_class(ruby)?;
-        let before = this.0.borrow().clone();
-        let mut after = before.clone();
-        let value = match act(&mut after) {
-            Ok(Admission::Buffered) => ruby.to_symbol("buffered").as_value(),
-            Ok(Admission::Flush(due)) => flush.funcall("new", (reason(ruby, due),))?,
-            Err(refused) => refusal(ruby, refused),
-        };
+        let flush = CLASSES.get(ruby)?.flush.get(ruby);
+        keep(ruby, this, &this.0, act, |admitted| match admitted {
+            Ok(Admission::Buffered) => Ok(symbol(ruby, "buffered").as_value()),
+            Ok(Admission::Flush(due)) => flush.funcall("new", (reason(ruby, due),)),
+            Err(refused) => Ok(refusal(ruby, refused)),
+        })
+    }
+
+    fn push(ruby: &Ruby, this: Obj<Self>, now: Value) -> Result<Value, Error> {
         this.check_frozen()?;
-        let mut batch = this.0.borrow_mut();
-        if *batch != before {
-            return Err(Error::new(
-                ruby.exception_runtime_error(),
-                "the batch changed while its answer was built; the push was not applied",
-            ));
-        }
-        *batch = after;
-        Ok(value)
+        let now = duration(now, "now")?;
+        Self::admit(ruby, this, |batch| batch.push(now))
     }
 
-    fn push(ruby: &Ruby, this: Obj<Self>, now: Nanos) -> Result<Value, Error> {
-        Self::admit(ruby, this, |batch| batch.push(now.0))
-    }
-
-    fn push_weighted(ruby: &Ruby, this: Obj<Self>, now: Nanos, cost: Cost) -> Result<Value, Error> {
-        Self::admit(ruby, this, |batch| batch.push_weighted(now.0, cost.0))
-    }
-
-    fn poll(ruby: &Ruby, this: Obj<Self>, now: Nanos) -> Result<Option<Value>, Error> {
+    fn push_weighted(
+        ruby: &Ruby,
+        this: Obj<Self>,
+        now: Value,
+        cost: Value,
+    ) -> Result<Value, Error> {
         this.check_frozen()?;
-        let answer = this.0.borrow_mut().poll(now.0);
+        let (now, cost) = (duration(now, "now")?, positive(cost, "cost")?);
+        Self::admit(ruby, this, |batch| batch.push_weighted(now, cost))
+    }
+
+    fn poll(ruby: &Ruby, this: Obj<Self>, now: Value) -> Result<Option<Value>, Error> {
+        this.check_frozen()?;
+        let now = duration(now, "now")?;
+        let answer = this.0.borrow_mut().poll(now);
         Ok(match answer {
             Ok(due) => due.map(|due| reason(ruby, due).as_value()),
             Err(refused) => Some(refusal(ruby, refused)),
@@ -149,8 +149,10 @@ impl Wrapper {
         Ok(counted(ruby, answer))
     }
 
-    fn flush(ruby: &Ruby, this: Obj<Self>, now: Nanos) -> Result<Value, Error> {
-        Self::count(ruby, this, |batch| batch.flush(now.0))
+    fn flush(ruby: &Ruby, this: Obj<Self>, now: Value) -> Result<Value, Error> {
+        this.check_frozen()?;
+        let now = duration(now, "now")?;
+        Self::count(ruby, this, |batch| batch.flush(now))
     }
 
     /// The core's `adapt`, across two native extensions: the controller is
@@ -169,27 +171,24 @@ impl Wrapper {
     ) -> Result<Value, Error> {
         this.check_frozen()?;
         f64::try_convert(error)?;
-        Nanos::try_convert(elapsed)?;
+        duration(elapsed, "elapsed")?;
         let stepped: Value = pid.funcall("step", (error, elapsed))?;
-        if let Some(symbol) = Symbol::from_value(stepped) {
+        if Symbol::from_value(stepped).is_some() {
             // The controller's refusals, by name: a `feedback_machines::Refusal`.
-            let refused = match symbol.name()?.as_ref() {
-                "not_finite" => Refusal::NotFinite,
-                "invalid_duration" => Refusal::InvalidDuration,
-                "overflow" => Refusal::Overflow,
-                _ => {
-                    let message = "step answered a Symbol that is not a controller refusal";
-                    return Err(range_error(ruby, message));
-                }
-            };
-            return Ok(refusal(ruby, refused));
+            let refused = ControllerRefusals::parse(ruby, stepped)?;
+            return Ok(refusal(ruby, controller_refusal(refused)));
         }
-        let output = Float::from_value(stepped)
-            .ok_or_else(|| type_error(ruby, "step must answer a Float or a refusal Symbol"))?;
-        Self::retarget(ruby, this, output.to_f64())
+        let output = Float::from_value(stepped).ok_or_else(|| {
+            let message = "step must answer a Float or a refusal Symbol";
+            Error::new(ruby.exception_type_error(), message)
+        })?;
+        Self::count(ruby, this, |batch| batch.retarget(output.to_f64()))
     }
 
-    fn retarget(ruby: &Ruby, this: Obj<Self>, output: f64) -> Result<Value, Error> {
+    /// Frozen is checked before `output` is converted.
+    fn retarget(ruby: &Ruby, this: Obj<Self>, output: Value) -> Result<Value, Error> {
+        this.check_frozen()?;
+        let output = f64::try_convert(output)?;
         Self::count(ruby, this, |batch| batch.retarget(output))
     }
 
@@ -198,7 +197,7 @@ impl Wrapper {
     }
 
     fn max_wait(ruby: &Ruby, this: &Self) -> Value {
-        nanos(ruby, this.0.borrow().max_wait())
+        nanoseconds(ruby, this.0.borrow().max_wait()).as_value()
     }
 
     fn pending(&self) -> u32 {
@@ -215,20 +214,15 @@ impl Wrapper {
 
     fn deadline(ruby: &Ruby, this: &Self) -> Option<Value> {
         let deadline = this.0.borrow().deadline();
-        deadline.map(|deadline| nanos(ruby, deadline))
+        deadline.map(|deadline| nanoseconds(ruby, deadline).as_value())
     }
 }
 
 pub fn define(ruby: &Ruby, module: RModule) -> Result<(), Error> {
-    let flush: RClass = module.const_get("Flush")?;
-    // Pinned: compaction must not move what the static points at.
-    ruby.gc_register_mark_object(flush);
-    FLUSH.set(flush.into()).map_err(|_| {
-        Error::new(
-            ruby.exception_runtime_error(),
-            "the batch_machines extension was initialised twice",
-        )
-    })?;
+    // `Flush` is defined in Ruby before the extension loads: a missing one
+    // is `NameError`.
+    let flush = Class::resolve(ruby, module, "Flush")?;
+    CLASSES.set(ruby, Classes { flush })?;
     module.define_singleton_method("__flush", function!(checked_flush, 1))?;
     let class = module.define_class("Batch", ruby.class_object())?;
     class.undef_default_alloc_func();

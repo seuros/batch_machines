@@ -280,8 +280,26 @@ class BatchMachinesTest < Minitest::Test
     assert_raises(FrozenError) { b.flush(0) }
     assert_raises(FrozenError) { b.adapt(pid, 1, 1) }
     assert_raises(FrozenError) { b.retarget(1) }
+    # Frozen is checked before the arguments are read.
+    [nil, -1, 1.5].each do |bad|
+      assert_raises(FrozenError) { b.push(bad) }
+      assert_raises(FrozenError) { b.push_weighted(0, bad) }
+      assert_raises(FrozenError) { b.poll(bad) }
+      assert_raises(FrozenError) { b.flush(bad) }
+      assert_raises(FrozenError) { b.adapt(pid, 1, bad) }
+    end
+    assert_raises(FrozenError) { b.retarget('2') }
+    assert_raises(FrozenError) { b.retarget(nil) }
     assert_equal 0, pid.steps
     assert_equal [1, 10, 0, 0, 1, nil], snapshot(b)
+  end
+
+  def test_the_extension_alone_is_a_name_error
+    lib = File.expand_path('../lib', __dir__)
+    script = 'begin; require "batch_machines_native/batch_machines_native"; ' \
+             'rescue NameError => e; print e.class; end'
+    output = IO.popen([RbConfig.ruby, '-I', lib, '-e', script], err: %i[child out], &:read)
+    assert_equal 'NameError', output
   end
 
   def test_gc

@@ -1,5 +1,6 @@
 #![allow(clippy::expect_used)]
 use super::*;
+use matryona_machines::testing::{refuses, unchanged};
 
 mod model;
 
@@ -110,21 +111,19 @@ fn a_refused_push_does_not_observe_its_clock() {
 fn every_refusal_changes_nothing() {
     let mut batch = batch(4, 2);
     assert_eq!(batch.push_weighted(at(5), nz(3)), BUFFERED);
-    let before = batch.clone();
-    assert_eq!(batch.push(at(4)), Err(Refusal::TimeRegression));
-    assert_eq!(batch.poll(at(4)), Err(Refusal::TimeRegression));
-    assert_eq!(batch.flush(at(4)), Err(Refusal::TimeRegression));
-    assert_eq!(batch.push_weighted(at(9), nz(2)), Err(Refusal::Full));
-    assert_eq!(batch.retarget(f64::NAN), Err(Refusal::NotFinite));
-    assert_eq!(batch.retarget(f64::INFINITY), Err(Refusal::NotFinite));
-    assert_eq!(batch, before);
+    refuses(&mut batch, Refusal::TimeRegression, |b| b.push(at(4)));
+    refuses(&mut batch, Refusal::TimeRegression, |b| b.poll(at(4)));
+    refuses(&mut batch, Refusal::TimeRegression, |b| b.flush(at(4)));
+    refuses(&mut batch, Refusal::Full, |b| b.push_weighted(at(9), nz(2)));
+    refuses(&mut batch, Refusal::NotFinite, |b| b.retarget(f64::NAN));
+    refuses(&mut batch, Refusal::NotFinite, |b| {
+        b.retarget(f64::INFINITY)
+    });
 
     // Overflow needs an empty batch: a pending deadline is never recomputed.
     assert_eq!(batch.push(Duration::MAX), DEADLINE);
     assert_eq!(batch.flush(Duration::MAX), Ok(2));
-    let before = batch.clone();
-    assert_eq!(batch.push(Duration::MAX), Err(Refusal::Overflow));
-    assert_eq!(batch, before);
+    refuses(&mut batch, Refusal::Overflow, |b| b.push(Duration::MAX));
 }
 
 #[test]
@@ -136,20 +135,17 @@ fn a_refused_adapt_changes_neither_batch_nor_controller() {
     );
     let mut pid = pid(5.0);
     assert_eq!(batch.adapt(&mut pid, 2.0, at(1)), Ok(2));
-    let (before, controller, blown) = (batch.clone(), pid.clone(), huge.clone());
-    assert_eq!(
-        batch.adapt(&mut pid, f64::NAN, at(1)),
-        Err(Refusal::NotFinite)
-    );
-    assert_eq!(
-        batch.adapt(&mut pid, 1.0, Duration::ZERO),
-        Err(Refusal::InvalidDuration)
-    );
-    assert_eq!(
-        batch.adapt(&mut huge, 1.0e308, at(1)),
-        Err(Refusal::Overflow)
-    );
-    assert_eq!((&batch, &pid, &huge), (&before, &controller, &blown));
+    let (controller, blown) = (pid.clone(), huge.clone());
+    refuses(&mut batch, Refusal::NotFinite, |b| {
+        b.adapt(&mut pid, f64::NAN, at(1))
+    });
+    refuses(&mut batch, Refusal::InvalidDuration, |b| {
+        b.adapt(&mut pid, 1.0, Duration::ZERO)
+    });
+    refuses(&mut batch, Refusal::Overflow, |b| {
+        b.adapt(&mut huge, 1.0e308, at(1))
+    });
+    assert_eq!((&pid, &huge), (&controller, &blown));
 }
 
 #[test]
@@ -175,9 +171,7 @@ fn retarget_truncates_and_clamps_to_capacity() {
     assert_eq!(batch.retarget(-100.0), Ok(1));
     assert_eq!(batch.retarget(0.0), Ok(1));
     assert_eq!(batch.retarget(1.0e300), Ok(5));
-    let before = batch.clone();
-    assert_eq!(batch.retarget(5.5), Ok(5));
-    assert_eq!(batch, before);
+    assert_eq!(unchanged(&mut batch, |b| b.retarget(5.5)), Ok(5));
 }
 
 /// The clock rule: an empty flush answers `0` whatever the time, so it is an
@@ -185,21 +179,15 @@ fn retarget_truncates_and_clamps_to_capacity() {
 #[test]
 fn an_empty_flush_records_no_clock() {
     let mut batch = batch(3, 5);
-    let before = batch.clone();
-    assert_eq!(batch.flush(at(9)), Ok(0));
-    assert_eq!(batch, before);
+    assert_eq!(unchanged(&mut batch, |b| b.flush(at(9))), Ok(0));
     assert_eq!(batch.push(at(4)), BUFFERED);
     assert_eq!(batch.flush(at(6)), Ok(1));
-    let before = batch.clone();
-    assert_eq!(batch.flush(at(20)), Ok(0));
-    assert_eq!(batch.flush(at(6)), Ok(0));
-    assert_eq!(batch, before);
+    assert_eq!(unchanged(&mut batch, |b| b.flush(at(20))), Ok(0));
+    assert_eq!(unchanged(&mut batch, |b| b.flush(at(6))), Ok(0));
     // A poll at the latest instant answers what it answered there.
-    assert_eq!(batch.poll(at(6)), Ok(None));
-    assert_eq!(batch, before);
+    assert_eq!(unchanged(&mut batch, |b| b.poll(at(6))), Ok(None));
     // Regression is still judged against the latest honoured instant.
-    assert_eq!(batch.flush(at(5)), Err(Refusal::TimeRegression));
-    assert_eq!(batch, before);
+    refuses(&mut batch, Refusal::TimeRegression, |b| b.flush(at(5)));
 }
 
 /// Which honoured answers record the clock: every one that depends on `now`.
