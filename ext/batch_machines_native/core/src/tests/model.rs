@@ -56,6 +56,9 @@ impl Model {
         if now < self.observed {
             return Err(Refusal::TimeRegression);
         }
+        if self.items == 0 {
+            return Ok(0);
+        }
         self.observed = now;
         self.cost = 0;
         self.deadline = None;
@@ -149,9 +152,9 @@ fn run(seed: u64, refusals: &mut [u32; 5], repeats: &mut u32) {
             5 => {
                 let answer = batch.flush(now);
                 assert_eq!(answer, model.flush(now));
-                if answer == Ok(0) && now == before.observed {
+                if answer == Ok(0) {
                     *repeats += 1;
-                    assert_eq!(batch, before, "a repeated flush changes nothing");
+                    assert_eq!(batch, before, "an empty flush changes nothing");
                 }
                 answer.err()
             }
@@ -178,13 +181,7 @@ fn run(seed: u64, refusals: &mut [u32; 5], repeats: &mut u32) {
         };
         if let Some(refusal) = refused {
             assert_eq!(batch, before, "{refusal:?} changed the batch");
-            refusals[match refusal {
-                Refusal::TimeRegression => 0,
-                Refusal::Overflow => 1,
-                Refusal::Full => 2,
-                Refusal::NotFinite => 3,
-                Refusal::InvalidDuration => 4,
-            }] += 1;
+            refusals[refusal as usize] += 1;
         } else if now != Duration::MAX {
             clock = clock.max(now.as_secs());
         }
@@ -197,15 +194,14 @@ fn run(seed: u64, refusals: &mut [u32; 5], repeats: &mut u32) {
     }
 }
 
+/// Spreads consecutive seeds across the xorshift state (2^64 / golden ratio).
+const SEED_SPREAD: u64 = 0x9E37_79B9_7F4A_7C15;
+
 #[test]
 fn random_runs_match_the_model_and_refusals_change_nothing() {
     let (mut refusals, mut repeats) = ([0; 5], 0);
     for seed in 1..=400_u64 {
-        run(
-            seed.wrapping_mul(0x9E37_79B9_7F4A_7C15),
-            &mut refusals,
-            &mut repeats,
-        );
+        run(seed.wrapping_mul(SEED_SPREAD), &mut refusals, &mut repeats);
     }
     assert!(refusals.iter().all(|count| *count > 0), "{refusals:?}");
     assert!(repeats > 0);

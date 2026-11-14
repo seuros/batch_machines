@@ -85,15 +85,20 @@ impl Batch {
             Some(deadline) => deadline,
             None => now.checked_add(self.max_wait).ok_or(Refusal::Overflow)?,
         };
+        // Ask the window first, then act: an acquisition within `available()`
+        // cannot be refused, so no flow refusal is mapped onto `Full`.
+        if cost.get() > self.credits.available() {
+            return Err(Refusal::Full);
+        }
         match self.credits.try_acquire(cost) {
             Ok(()) => {}
-            // An acquisition is only ever refused as `Insufficient`;
-            // `ExceedsInFlight` belongs to a release. Both are named so a new
-            // flow refusal fails to compile here.
             Err(
                 flow_machines::Refusal::Insufficient { .. }
                 | flow_machines::Refusal::ExceedsInFlight { .. },
-            ) => return Err(Refusal::Full),
+            ) => {
+                debug_assert!(false, "the window refused a cost within available()");
+                return Err(Refusal::Full);
+            }
         }
         self.observed = now;
         self.items += 1;
@@ -104,7 +109,8 @@ impl Batch {
     }
 
     /// Recommend a flush without changing pending work: `Ok(None)` is the
-    /// honoured answer "nothing is due". An honoured poll observes `now`.
+    /// honoured answer "nothing is due at this instant". Every honoured poll
+    /// observes `now`, `Ok(None)` included: the answer depends on it.
     ///
     /// # Errors
     ///
@@ -119,8 +125,9 @@ impl Batch {
     /// Acknowledge a full flush or cancellation: every pending item leaves,
     /// the deadline is cleared, and the old item count is the answer.
     ///
-    /// Flushing an empty batch is honoured and answers zero; a repeat at the
-    /// same `now` changes nothing.
+    /// A flush that empties the batch observes `now`. Flushing an empty batch
+    /// is an honoured repeat: it answers zero whatever the time, so it
+    /// changes nothing and observes nothing.
     ///
     /// # Errors
     ///
@@ -128,6 +135,9 @@ impl Batch {
     /// observed instant; nothing changed.
     pub fn flush(&mut self, now: Duration) -> Result<u32, Refusal> {
         self.check(now)?;
+        if self.items == 0 {
+            return Ok(0);
+        }
         self.observed = now;
         self.credits = CreditWindow::new(self.capacity);
         self.deadline = None;
@@ -212,9 +222,10 @@ impl Batch {
 
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn aim(&mut self, output: f64) -> u32 {
-        // Clamped to `1.0..=capacity`, so the cast is exact and never zero.
+        // Clamped to `1.0..=capacity`, so the cast is exact and at least one:
+        // the target is one plus the rest, and no zero arm exists.
         let cost = output.clamp(1.0, f64::from(self.capacity.get())) as u32;
-        self.target = NonZeroU32::new(cost).unwrap_or(NonZeroU32::MIN);
+        self.target = NonZeroU32::MIN.saturating_add(cost.saturating_sub(1));
         self.target.get()
     }
 

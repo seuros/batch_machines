@@ -19,6 +19,9 @@ module BatchMachines
   type flush_reason = :size | :deadline
 
   # The core's `Admission::Flush(FlushReason)`: counted, and a flush is due.
+  # `new` holds a hand-built value to the same rule as one the gem returned:
+  # RangeError for a symbol that is not a `FlushReason`, TypeError for a
+  # non-Symbol. Sealed: no `allocate`, subclassing raises TypeError.
   class Flush < Data
     attr_reader reason: flush_reason
     def self.new: (flush_reason reason) -> Flush
@@ -42,6 +45,10 @@ module BatchMachines
 
     # The core's `push(now)`: `push_weighted(now, 1)`.
     # Honoured: :buffered or a Flush; the item is counted either way.
+    # An honoured push observes `now`. Counted on a copy, applied once the
+    # answer is built: a raise while building it counts nothing; FrozenError
+    # if building it froze the batch, RuntimeError if it changed the batch,
+    # nothing applied in either case.
     # Refused: :time_regression, :full. The core's third push refusal,
     # `Overflow` (`now + max_wait` does not fit a Duration), cannot happen
     # here: Integer nanoseconds stop at 2**64-1, far below that limit.
@@ -53,25 +60,33 @@ module BatchMachines
     def push_weighted: (Integer now, Integer cost) -> (admission | :time_regression | :full)
 
     # The core's `poll(now)`. Honoured: :size or :deadline when a flush is
-    # due, nil when nothing is due. Refused: :time_regression.
+    # due, nil when nothing is due at this instant. Every honoured poll
+    # observes `now`, nil included. Refused: :time_regression.
     def poll: (Integer now) -> (flush_reason | nil | :time_regression)
 
-    # The core's `flush(now)`. Honoured: the items that were pending, 0 for
-    # an empty batch. Refused: :time_regression. Never nil.
+    # The core's `flush(now)`. Honoured: the items that were pending, and
+    # `now` is observed; 0 for an empty batch, an honoured repeat that holds
+    # whatever the time and observes nothing. Refused: :time_regression.
+    # Never nil.
     def flush: (Integer now) -> (Integer | :time_regression)
 
     # The core's `adapt(pid, error, elapsed)`: steps the caller's controller
     # once (`pid.step(error, elapsed)`) and retargets to its output.
     # Honoured: the new target. Refused: :not_finite, :invalid_duration,
     # :overflow, as the controller answered them; nothing changed. Never nil.
+    # Reads and observes no clock: `elapsed` is a span.
     # Raises TypeError for a non-number error, a non-Integer elapsed, or a
-    # `step` that answers anything else; RangeError for an elapsed outside
-    # 0..2**64-1; NoMethodError for an object without `step`.
+    # `step` that answers neither a Float nor a Symbol; RangeError for an
+    # elapsed outside 0..2**64-1 or a `step` that answers any other Symbol;
+    # NoMethodError for an object without `step`. FrozenError for a frozen
+    # batch before stepping; a `step` that freezes the batch has stepped the
+    # controller, and FrozenError follows with the target unchanged.
     def adapt: (_Controller pid, Numeric error, Integer elapsed) -> (Integer | :not_finite | :invalid_duration | :overflow)
 
     # The core's `retarget(output)`: the target becomes `output` truncated
     # and clamped to 1..capacity. Honoured: the new target. Refused:
-    # :not_finite. Never nil. Raises TypeError for a non-number.
+    # :not_finite. Never nil. Reads no clock. Raises TypeError for a
+    # non-number.
     def retarget: (Numeric output) -> (Integer | :not_finite)
 
     def capacity: () -> Integer

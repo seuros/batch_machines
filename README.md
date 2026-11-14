@@ -222,26 +222,30 @@ batch.pending       # => 3
 - **Ruby mirrors the Rust core.** `Batch.new(capacity, max_wait)` and every method take their arguments positionally, in the core's order. `Admission::Buffered` is `:buffered`, `Admission::Flush(reason)` is a `BatchMachines::Flush` `Data` with a `reason`, and `FlushReason` is `:size` or `:deadline`.
 - **Every answer, by method.**
 
-  | Method | Honoured | Refused |
-  | --- | --- | --- |
-  | `push(now)` | `:buffered` or a `Flush`; the item is counted either way | `:time_regression`, `:full` |
-  | `push_weighted(now, cost)` | `:buffered` or a `Flush`; the item is counted either way | `:time_regression`, `:full` |
-  | `poll(now)` | `:size` or `:deadline`, `nil` when nothing is due | `:time_regression` |
-  | `flush(now)` | the items that were pending (Integer), `0` for an empty hold | `:time_regression` |
-  | `adapt(pid, error, elapsed)` | the new target (Integer) | `:not_finite`, `:invalid_duration`, `:overflow` |
-  | `retarget(output)` | the new target (Integer) | `:not_finite` |
-  | `capacity`, `max_wait`, `pending`, `pending_cost`, `target` | Integer | never refuse |
-  | `deadline` | Integer nanoseconds, `nil` when nothing is pending | never refuses |
+  | Method | Honoured | Records the clock | Refused |
+  | --- | --- | --- | --- |
+  | `Flush.new(reason)` | a `Flush` | no clock | none; a symbol that is not `:size` or `:deadline` raises `RangeError`, a non-Symbol `TypeError` |
+  | `Batch.new(capacity, max_wait)` | a `Batch` | no clock | none; a zero `max_wait` raises `RangeError` |
+  | `push(now)` | `:buffered` or a `Flush`; the item is counted either way | yes, every honoured answer | `:time_regression`, `:full` |
+  | `push_weighted(now, cost)` | `:buffered` or a `Flush`; the item is counted either way | yes, every honoured answer | `:time_regression`, `:full` |
+  | `poll(now)` | `:size` or `:deadline`, `nil` when nothing is due at this instant | yes, every honoured answer, `nil` included | `:time_regression` |
+  | `flush(now)` | the items that were pending (Integer), `0` for an empty hold | yes when items left; `0` records nothing | `:time_regression` |
+  | `adapt(pid, error, elapsed)` | the new target (Integer) | no, `elapsed` is a span | `:not_finite`, `:invalid_duration`, `:overflow` |
+  | `retarget(output)` | the new target (Integer) | no clock | `:not_finite` |
+  | `capacity`, `max_wait`, `pending`, `pending_cost`, `target` | Integer | no, a query | never refuse |
+  | `deadline` | Integer nanoseconds, `nil` when nothing is pending | no, a query | never refuses |
 
   Every refusal has its own symbol; there is no catch-all. `nil` only ever means "nothing due" or "nothing pending".
+- **A `Flush` is valid or does not exist.** `Flush.new(:nope)` raises `RangeError` and `Flush.new('size')` raises `TypeError`, exactly as if the batch had tried to answer it. Build one by hand to compare against and it is held to the same rule. `Flush` is sealed: `Flush.allocate` is gone and subclassing raises `TypeError` (a named `class X < Flush` still binds its constant first; Ruby does that before `inherited` runs). The batch never reads a `Flush` back, so a forged one cannot reach it.
+- **The binding never loses work.** Everything that can raise, a bad argument, a frozen batch, a controller that raises, happens before the batch counts or retargets anything. The `Flush` class is resolved once when the gem loads; swapping the constant later changes nothing the batch builds. A push answers with a `Flush` built by Ruby code, so it is counted on a copy and the batch moves only once that answer exists. If a call raised, the batch is where it was. If a redefined `Flush.new` froze the batch while the answer was being built, the push raises `FrozenError`; if it changed the batch, `RuntimeError` and that change stands. Either way the push is not applied.
 - **A refusal never raises and changes nothing.** No item counted, no cost held, the target where it was. The clock a refused call carried is not remembered either, so a refused push can't turn your next call into a `:time_regression`.
-- **Time only moves forward.** `push`, `poll` and `flush` with a clock earlier than the last honoured one answer `:time_regression`.
-- **Flushing an empty hold is honoured** and answers `0`. Do it twice, get `0` twice.
+- **Time only moves forward.** `push`, `poll` and `flush` with a clock earlier than the last recorded one answer `:time_regression`. An answer records the clock when it depends on the clock: every honoured `push`, every honoured `poll` (a `nil` is "nothing due at this instant") and a `flush` that emptied the hold.
+- **Flushing an empty hold is honoured** and answers `0`. Do it twice, get `0` twice. That answer is true whatever the time, so it records nothing: an empty flush at a late clock does not turn an earlier push into a `:time_regression`.
 - **Capacity and cost are Integers** in `1...2**32`. Anything else is `TypeError`, zero or out of range is `RangeError`.
 - **Time is Integer nanoseconds** in `0...2**64`, instants and spans alike. Floats and strings raise `TypeError`, negative or too large raises `RangeError`. A zero `max_wait` raises `RangeError`: the first item would be late on arrival.
-- **The controller is duck-typed.** `adapt` calls `pid.step(error, elapsed)` and expects a Float or one of `:not_finite`, `:invalid_duration`, `:overflow`, which it hands straight back to you. Anything else from `step` is a `TypeError`; an object without `step` is a `NoMethodError`. The error must be a number and `elapsed` an Integer in range, checked before the controller is touched. A refusing controller has not been stepped, so nothing changed on either side.
+- **The controller is duck-typed.** `adapt` calls `pid.step(error, elapsed)` and expects a Float or one of `:not_finite`, `:invalid_duration`, `:overflow`, which it hands straight back to you. Any other Symbol from `step` is a `RangeError`, anything that is neither a Float nor a Symbol a `TypeError`; an object without `step` is a `NoMethodError`. The error must be a number and `elapsed` an Integer in range, checked before the controller is touched. A refusing controller has not been stepped, so nothing changed on either side.
 - **The Rust core has one more push refusal**, `Overflow`, for a clock so late that the deadline doesn't fit. Integer nanoseconds run out long before that, so Ruby never sees it from a push.
-- **Frozen means frozen.** `freeze` the batch and `push`, `push_weighted`, `poll`, `flush`, `adapt`, and `retarget` all raise `FrozenError`, before any controller is stepped.
+- **Frozen means frozen.** `freeze` the batch and `push`, `push_weighted`, `poll`, `flush`, `adapt`, and `retarget` all raise `FrozenError`, before any controller is stepped. A controller whose `step` freezes the batch has been stepped (the binding cannot undo your object); `adapt` then raises `FrozenError` and the target is where it was.
 - **No ids, nothing to restore.** The batch hands out no handles. After a restart, build a new one; it starts empty.
 
 ## What You Think You're Doing vs Reality

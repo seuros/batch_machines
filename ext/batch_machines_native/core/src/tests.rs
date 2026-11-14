@@ -33,16 +33,23 @@ fn zero_max_wait_is_not_a_configuration() {
     );
 }
 
+/// The deadline is the first item's, absolute, not extended by arrivals, and
+/// cleared by a flush; the next item arms a new one.
 #[test]
-fn first_item_deadline_is_not_extended_by_arrivals() {
+fn first_item_deadline_is_absolute_and_cleared_by_flush() {
     let mut batch = batch(3, 5);
     assert_eq!(batch.push(at(1)), BUFFERED);
     assert_eq!(batch.push(at(4)), BUFFERED);
+    assert_eq!(batch.deadline(), Some(at(6)));
+    assert_eq!(batch.poll(at(5)), Ok(None));
     assert_eq!(batch.poll(at(6)), Ok(Some(FlushReason::Deadline)));
     assert_eq!(batch.push(at(6)), DEADLINE);
     assert_eq!(batch.push(at(6)), Err(Refusal::Full));
     assert_eq!(batch.flush(at(6)), Ok(3));
+    assert_eq!((batch.deadline(), batch.pending()), (None, 0));
     assert_eq!(batch.poll(at(6)), Ok(None));
+    assert_eq!(batch.push(at(7)), BUFFERED);
+    assert_eq!(batch.deadline(), Some(at(12)));
 }
 
 #[test]
@@ -57,21 +64,6 @@ fn adaptation_changes_size_but_not_age() {
     assert_eq!(batch.poll(at(10)), Ok(Some(FlushReason::Deadline)));
     assert_eq!(batch.flush(at(10)), Ok(2));
     assert_eq!(batch.target(), 5);
-}
-
-#[test]
-fn deadline_is_absolute_and_cleared_by_flush() {
-    let mut batch = batch(4, 2);
-    assert_eq!(batch.deadline(), None);
-    assert_eq!(batch.push(at(3)), BUFFERED);
-    assert_eq!(batch.push(at(4)), BUFFERED);
-    assert_eq!(batch.deadline(), Some(at(5)));
-    assert_eq!(batch.poll(at(4)), Ok(None));
-    assert_eq!(batch.poll(at(5)), Ok(Some(FlushReason::Deadline)));
-    assert_eq!(batch.flush(at(5)), Ok(2));
-    assert_eq!((batch.deadline(), batch.pending()), (None, 0));
-    assert_eq!(batch.push(at(6)), BUFFERED);
-    assert_eq!(batch.deadline(), Some(at(8)));
 }
 
 #[test]
@@ -188,31 +180,60 @@ fn retarget_truncates_and_clamps_to_capacity() {
     assert_eq!(batch, before);
 }
 
+/// The clock rule: an empty flush answers `0` whatever the time, so it is an
+/// honoured repeat that records nothing, not even a later `now`.
 #[test]
-fn honoured_repeats_change_nothing() {
+fn an_empty_flush_records_no_clock() {
     let mut batch = batch(3, 5);
-    assert_eq!(batch.push(at(1)), BUFFERED);
-    assert_eq!(batch.flush(at(2)), Ok(1));
     let before = batch.clone();
-    assert_eq!(batch.flush(at(2)), Ok(0));
-    assert_eq!(batch.poll(at(2)), Ok(None));
+    assert_eq!(batch.flush(at(9)), Ok(0));
+    assert_eq!(batch, before);
+    assert_eq!(batch.push(at(4)), BUFFERED);
+    assert_eq!(batch.flush(at(6)), Ok(1));
+    let before = batch.clone();
+    assert_eq!(batch.flush(at(20)), Ok(0));
+    assert_eq!(batch.flush(at(6)), Ok(0));
+    assert_eq!(batch, before);
+    // A poll at the latest instant answers what it answered there.
+    assert_eq!(batch.poll(at(6)), Ok(None));
+    assert_eq!(batch, before);
+    // Regression is still judged against the latest honoured instant.
+    assert_eq!(batch.flush(at(5)), Err(Refusal::TimeRegression));
     assert_eq!(batch, before);
 }
 
+/// Which honoured answers record the clock: every one that depends on `now`.
 #[test]
-fn refusal_is_an_error_with_a_message_per_variant() {
-    let all = [
+fn answers_that_depend_on_now_record_it() {
+    let mut batch = batch(3, 5);
+    assert_eq!(batch.poll(at(2)), Ok(None));
+    assert_eq!(batch.push(at(1)), Err(Refusal::TimeRegression));
+    assert_eq!(batch.push(at(3)), BUFFERED);
+    assert_eq!(batch.poll(at(2)), Err(Refusal::TimeRegression));
+    assert_eq!(batch.flush(at(4)), Ok(1));
+    assert_eq!(batch.poll(at(3)), Err(Refusal::TimeRegression));
+    // Aiming the target reads no clock.
+    let observed = batch.observed;
+    assert_eq!(batch.retarget(2.0), Ok(2));
+    assert_eq!(batch.observed, observed);
+}
+
+#[test]
+fn every_refusal_has_its_own_message() {
+    extern crate std;
+    use std::{string::ToString, vec::Vec};
+    let messages: Vec<_> = [
         Refusal::TimeRegression,
         Refusal::Overflow,
         Refusal::Full,
         Refusal::NotFinite,
         Refusal::InvalidDuration,
-    ];
-    let error: &dyn core::error::Error = &all[0];
-    assert!(error.source().is_none());
-    for (i, refusal) in all.iter().enumerate() {
-        for other in &all[i + 1..] {
-            assert_ne!(refusal, other);
-        }
+    ]
+    .iter()
+    .map(|refusal| (refusal as &dyn core::error::Error).to_string())
+    .collect();
+    for (i, message) in messages.iter().enumerate() {
+        assert_ne!(message, "");
+        assert!(!messages[i + 1..].contains(message), "{message}");
     }
 }

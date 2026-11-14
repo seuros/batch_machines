@@ -11,7 +11,7 @@ batch-machines = { path = "ext/batch_machines_native/core" }
 magnus = { version = "0.9.3", default-features = false }
 rb-sys = { version = "0.9.130", default-features = false, features = ["stable-api-compiled-fallback"] }
 flow-machines = ">=0.3"
-feedback-machines = ">=0.3"
+feedback-machines = ">=0.4"
 [workspace.lints.rust]
 unsafe_code = "deny"
 unused_must_use = "warn"

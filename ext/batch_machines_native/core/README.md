@@ -25,28 +25,39 @@ timer driver, payload storage, partial flush, or Ruby binding is included.
 - **Answers.** Every operation that can refuse returns `Result<T, Refusal>`,
   and `T` describes only honoured outcomes.
 
-  | Call | Honoured | Refused |
-  | --- | --- | --- |
-  | `Batch::new(capacity, max_wait)` | `Some(Batch)` | `None` for a zero `max_wait` (configuration) |
-  | `push(now)`, `push_weighted(now, cost)` | `Admission::Buffered`, `Admission::Flush(FlushReason)`; the item is counted either way | `TimeRegression`, `Overflow`, `Full` |
-  | `poll(now)` | `Some(FlushReason)`, or `None` when nothing is due | `TimeRegression` |
-  | `flush(now)` | the items that were pending, `0` for an empty batch | `TimeRegression` |
-  | `adapt(pid, error, elapsed)` | the new target | `NotFinite`, `InvalidDuration`, `Overflow` |
-  | `retarget(output)` | the new target | `NotFinite` |
+  | Call | Honoured | Records `now` | Refused |
+  | --- | --- | --- | --- |
+  | `Batch::new(capacity, max_wait)` | `Some(Batch)` | no clock | `None` for a zero `max_wait` (configuration) |
+  | `push(now)`, `push_weighted(now, cost)` | `Admission::Buffered`, `Admission::Flush(FlushReason)`; the item is counted either way | yes | `TimeRegression`, `Overflow`, `Full` |
+  | `poll(now)` | `Some(FlushReason)`, or `None` when nothing is due at this instant | yes, `None` included | `TimeRegression` |
+  | `flush(now)` | the items that were pending, `0` for an empty batch | yes when items left; `0` records nothing | `TimeRegression` |
+  | `adapt(pid, error, elapsed)` | the new target | no, `elapsed` is a span | `NotFinite`, `InvalidDuration`, `Overflow` |
+  | `retarget(output)` | the new target | no clock | `NotFinite` |
 
 - **Refusals change nothing.** Every `Err` leaves the batch equal to a clone
   taken before the call: no item counted, no cost held, and the `now` it
   carried is not observed, so a refused call can never make a later one a
   `TimeRegression`. A refused `adapt` leaves the controller untouched too.
 - **`Refusal`.** `TimeRegression`: `now` is earlier than the latest instant an
-  honoured `push`, `poll` or `flush` observed. `Overflow`: `now + max_wait`
+  honoured `push`, `poll` or non-empty `flush` observed. `Overflow`: `now + max_wait`
   does not fit a `Duration` (only a push that would start a batch computes
   it), or a term of the PID calculation is not finite. `Full`: the item costs
   more than the capacity still unspent. `NotFinite`: the error or output is
   NaN or infinite. `InvalidDuration`: `adapt` was given a zero `elapsed`.
+- **Which answers record the clock.** An honoured call records `now` exactly
+  when its answer depends on `now`: every honoured push (its admission names
+  what is due at that instant), every honoured `poll` (`None` is "nothing due
+  at this instant"), and a `flush` that emptied the batch. An empty `flush`
+  answers `0` whatever the time and records nothing. `adapt` and `retarget`
+  read no clock.
+- **No unreachable refusals.** A push asks the credit window what is
+  `available()` and only then acquires, so no `flow-machines` refusal is
+  translated: `Full` is the batch's own answer. The acquisition that follows
+  cannot be refused; that invariant is a `debug_assert!`, and a release build
+  answers `Full` with nothing changed. Nothing in the crate panics.
 - **Repeats.** `flush` on an empty batch is honoured and answers `0`; the
-  batch can prove it, because nothing is pending. At the same `now` it changes
-  nothing. A repeated `poll` at the same `now` answers the same and changes
+  batch can prove it, because nothing is pending. It changes nothing at any
+  `now`. A repeated `poll` at the same `now` answers the same and changes
   nothing. `retarget` to the target already set changes nothing. A push is
   never a repeat: the batch counts items, it does not know them.
 - **Time.** Instants and spans are `core::time::Duration` on the caller's
