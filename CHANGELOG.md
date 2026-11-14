@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.5.0](https://github.com/seuros/batch_machines/compare/batch_machines/v0.4.0...batch_machines/v0.5.0) (2026-11-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* read retarget/adapt reals exactly with matryona 0.3
+
+### Features
+
+* read retarget/adapt reals exactly with matryona 0.3 ([cb5eee4](https://github.com/seuros/batch_machines/commit/cb5eee456ac5a5455d6fe9a3ccac3e0dc5445cbb))
+
 ## [0.4.0](https://github.com/seuros/batch_machines/compare/batch_machines/v0.3.0...batch_machines/v0.4.0) (2026-11-14)
 
 
