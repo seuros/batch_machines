@@ -101,6 +101,19 @@ class BatchMachinesTest < Minitest::Test
     assert_raises(TypeError) { b.retarget(nil) }
   end
 
+  # The output is exactly a Float or an Integer: nothing is converted, so a
+  # Rational or an object answering to_f is a TypeError naming the argument.
+  def test_retarget_reads_a_real_by_type_not_by_to_f
+    b = Batch.new(5, 10)
+    floaty = Object.new
+    floaty.define_singleton_method(:to_f) { 2.0 }
+    [3r, floaty].each do |odd|
+      error = assert_raises(TypeError) { b.retarget(odd) }
+      assert_equal 'output must be a Float or Integer', error.message
+    end
+    assert_equal 5, b.target
+  end
+
   def test_adapt_steps_the_callers_controller
     b = Batch.new(5, 10)
     pid = ProportionalDuck.new(100.0)
@@ -136,6 +149,12 @@ class BatchMachinesTest < Minitest::Test
     b = Batch.new(5, 10)
     pid = ProportionalDuck.new(5.0)
     assert_raises(TypeError) { b.adapt(pid, '1', 1) }
+    floaty = Object.new
+    floaty.define_singleton_method(:to_f) { 1.0 }
+    [1r, floaty].each do |odd|
+      error = assert_raises(TypeError) { b.adapt(pid, odd, 1) }
+      assert_equal 'error must be a Float or Integer', error.message
+    end
     assert_raises(TypeError) { b.adapt(pid, 1.0, 1.5) }
     assert_raises(RangeError) { b.adapt(pid, 1.0, -1) }
     assert_raises(NoMethodError) { b.adapt(Object.new, 1.0, 1) }

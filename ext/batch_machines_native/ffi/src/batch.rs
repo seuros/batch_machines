@@ -2,27 +2,26 @@ use std::cell::RefCell;
 
 use batch_machines::{Admission, Batch, FlushReason, Refusal};
 use magnus::{
-    Error, Float, RModule, Ruby, Symbol, TryConvert, Value, function, method, prelude::*,
-    typed_data::Obj,
+    Error, Float, RModule, Ruby, Symbol, Value, function, method, prelude::*, typed_data::Obj,
 };
 use matryona_machines::ruby::{
-    Class, Registry, Symbols, duration, keep, nanoseconds, positive, symbol,
+    Class, Registry, Symbols, duration, keep, nanoseconds, positive, real, symbol,
 };
 
-/// A refusal's symbol name: the snake case of the core variant.
-const fn refusal_name(refused: Refusal) -> &'static str {
-    match refused {
-        Refusal::TimeRegression => "time_regression",
-        Refusal::Overflow => "overflow",
-        Refusal::Full => "full",
-        Refusal::NotFinite => "not_finite",
-        Refusal::InvalidDuration => "invalid_duration",
+matryona_machines::symbols! {
+    /// The core's refusals, each the snake case of its variant.
+    Refusals for Refusal as "a refusal" {
+        TimeRegression => "time_regression",
+        Overflow => "overflow",
+        Full => "full",
+        NotFinite => "not_finite",
+        InvalidDuration => "invalid_duration",
     }
 }
 
 /// Ruby symbol of a refusal.
 fn refusal(ruby: &Ruby, refused: Refusal) -> Value {
-    symbol(ruby, refusal_name(refused)).as_value()
+    Refusals::symbol(ruby, refused).as_value()
 }
 
 matryona_machines::symbols! {
@@ -170,7 +169,7 @@ impl Wrapper {
         elapsed: Value,
     ) -> Result<Value, Error> {
         this.check_frozen()?;
-        f64::try_convert(error)?;
+        real(error, "error")?;
         duration(elapsed, "elapsed")?;
         let stepped: Value = pid.funcall("step", (error, elapsed))?;
         if Symbol::from_value(stepped).is_some() {
@@ -188,7 +187,7 @@ impl Wrapper {
     /// Frozen is checked before `output` is converted.
     fn retarget(ruby: &Ruby, this: Obj<Self>, output: Value) -> Result<Value, Error> {
         this.check_frozen()?;
-        let output = f64::try_convert(output)?;
+        let output = real(output, "output")?;
         Self::count(ruby, this, |batch| batch.retarget(output))
     }
 
