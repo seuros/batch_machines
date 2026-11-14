@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.0](https://github.com/seuros/batch_machines/compare/batch_machines/v0.3.0...batch_machines/v0.4.0) (2026-11-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* adopt matryona-machines 0.2 (symbols!, frozen-first)
+
+### Features
+
+* adopt matryona-machines 0.2 (symbols!, frozen-first) ([8c964b4](https://github.com/seuros/batch_machines/commit/8c964b4fbc9c0a051da4e4e187378a6dcd718fe7))
+
 ## [0.3.0](https://github.com/seuros/batch_machines/compare/batch_machines/v0.2.0...batch_machines/v0.3.0) (2026-11-14)
 
 
