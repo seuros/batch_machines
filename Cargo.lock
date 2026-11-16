@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "batch-machines"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "feedback-machines",
  "flow-machines",
@@ -22,7 +22,7 @@ dependencies = [
 
 [[package]]
 name = "batch_machines_native"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "batch-machines",
  "feedback-machines",
