@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used)]
 use super::*;
 use matryona_machines::testing::{refuses, unchanged};
 

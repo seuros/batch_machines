@@ -32,9 +32,9 @@ module BatchMachines
   type admission = :buffered | Flush
 
   # A FeedbackMachines::Pid, or anything whose `step` answers as it does: a
-  # Float output, or :not_finite, :invalid_duration or :overflow.
+  # Float (or Integer) output, or :not_finite, :invalid_duration or :overflow.
   interface _Controller
-    def step: (Numeric error, Integer elapsed) -> (Float | :not_finite | :invalid_duration | :overflow)
+    def step: (Numeric error, Integer elapsed) -> (Float | Integer | :not_finite | :invalid_duration | :overflow)
   end
 
   # The core's `Batch`.
@@ -75,9 +75,12 @@ module BatchMachines
     # Honoured: the new target. Refused: :not_finite, :invalid_duration,
     # :overflow, as the controller answered them; nothing changed. Never nil.
     # Reads and observes no clock: `elapsed` is a span.
+    # An Integer output is read as its nearest Float; one past Float::MAX is
+    # infinite and answers :not_finite.
     # Raises TypeError for a non-number error, a non-Integer elapsed, or a
-    # `step` that answers neither a Float nor a Symbol; RangeError for an
-    # elapsed outside 0..2**64-1 or a `step` that answers any other Symbol;
+    # `step` that answers neither a Float, an Integer nor a Symbol; RangeError
+    # for an elapsed outside 0..2**64-1 or a `step` that answers any other
+    # Symbol;
     # NoMethodError for an object without `step`. FrozenError for a frozen
     # batch before stepping; a `step` that freezes the batch has stepped the
     # controller, and FrozenError follows with the target unchanged.
@@ -98,4 +101,9 @@ module BatchMachines
     # The instant `poll` first answers :deadline; nil while nothing is pending.
     def deadline: () -> Integer?
   end
+
+  # Native check behind `Flush#initialize`: the reason back when it is a
+  # `FlushReason`, RangeError for any other Symbol, TypeError for a
+  # non-Symbol.
+  private def self.__flush: (flush_reason reason) -> flush_reason
 end

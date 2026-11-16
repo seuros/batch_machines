@@ -1,11 +1,10 @@
 use std::cell::RefCell;
 
 use batch_machines::{Admission, Batch, FlushReason, Refusal};
-use magnus::{
-    Error, Float, RModule, Ruby, Symbol, Value, function, method, prelude::*, typed_data::Obj,
-};
+use magnus::{Error, RModule, Ruby, Symbol, Value, function, method, prelude::*, typed_data::Obj};
 use matryona_machines::ruby::{
-    Class, Registry, Symbols, duration, keep, nanoseconds, positive, real, symbol,
+    Class, Named, Refused, Registry, SymbolNames, SymbolOrReal, Symbols, class_name, duration,
+    keep, nanoseconds, positive, real, symbol_or_real_why,
 };
 
 matryona_machines::symbols! {
@@ -38,6 +37,14 @@ matryona_machines::symbols! {
         NotFinite => "not_finite",
         InvalidDuration => "invalid_duration",
         Overflow => "overflow",
+    }
+}
+
+matryona_machines::symbols! {
+    /// What a push answers: `:buffered`, or a `Flush`.
+    Admissions for Admission as "an admission" => names_only {
+        Buffered => "buffered",
+        Flush(..) => "flush",
     }
 }
 
@@ -103,7 +110,9 @@ impl Wrapper {
         this.check_frozen()?;
         let flush = CLASSES.get(ruby)?.flush.get(ruby);
         keep(ruby, this, &this.0, act, |admitted| match admitted {
-            Ok(Admission::Buffered) => Ok(symbol(ruby, "buffered").as_value()),
+            Ok(Admission::Buffered) => {
+                Ok(Admissions::symbol_of(ruby, Admission::Buffered).as_value())
+            }
             Ok(Admission::Flush(due)) => flush.funcall("new", (reason(ruby, due),)),
             Err(refused) => Ok(refusal(ruby, refused)),
         })
@@ -156,7 +165,10 @@ impl Wrapper {
 
     /// The core's `adapt`, across two native extensions: the controller is
     /// the caller's object, stepped through its own `step`, and its answer is
-    /// handed to the core's `retarget`. `adapt` is exactly that pair. The
+    /// handed to the core's `retarget`. `adapt` is exactly that pair. `step`
+    /// answers a refusal Symbol, or a Float or an Integer (read as `real`
+    /// reads one: its nearest Float, no `to_f` run); a NaN or infinite
+    /// output is the core's `:not_finite`. The
     /// batch is checked for frozen before the controller is touched; a
     /// `step` that freezes it has stepped the caller's controller, which the
     /// binding cannot undo, and `retarget` then raises `FrozenError` with the
@@ -172,16 +184,21 @@ impl Wrapper {
         real(error, "error")?;
         duration(elapsed, "elapsed")?;
         let stepped: Value = pid.funcall("step", (error, elapsed))?;
-        if Symbol::from_value(stepped).is_some() {
-            // The controller's refusals, by name: a `feedback_machines::Refusal`.
-            let refused = ControllerRefusals::parse(ruby, stepped)?;
-            return Ok(refusal(ruby, controller_refusal(refused)));
-        }
-        let output = Float::from_value(stepped).ok_or_else(|| {
-            let message = "step must answer a Float or a refusal Symbol";
-            Error::new(ruby.exception_type_error(), message)
+        // The controller's refusals, by name: a `feedback_machines::Refusal`.
+        let read = symbol_or_real_why(ruby, stepped, ControllerRefusals, |why| match why {
+            Refused::UnknownSymbol(_) => format!(
+                "step's refusal must be one of :{}",
+                ControllerRefusals::EVERY_NAME.join(", :")
+            ),
+            _ => format!(
+                "step must answer a Float, an Integer or a refusal Symbol, not {}",
+                class_name(stepped)
+            ),
         })?;
-        Self::count(ruby, this, |batch| batch.retarget(output.to_f64()))
+        match read {
+            SymbolOrReal::Symbol(refused) => Ok(refusal(ruby, controller_refusal(refused))),
+            SymbolOrReal::Real(output) => Self::count(ruby, this, |batch| batch.retarget(output)),
+        }
     }
 
     /// Frozen is checked before `output` is converted.

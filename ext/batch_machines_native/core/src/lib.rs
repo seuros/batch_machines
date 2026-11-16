@@ -1,4 +1,5 @@
 #![no_std]
+#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
 #![doc = include_str!("../README.md")]
 
 mod refusal;
@@ -101,6 +102,7 @@ impl Batch {
             }
         }
         self.observed = now;
+        // Each item holds at least one credit of a u32 capacity, so no wrap.
         self.items += 1;
         self.deadline = Some(deadline);
         Ok(self

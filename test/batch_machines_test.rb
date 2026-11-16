@@ -159,11 +159,41 @@ class BatchMachinesTest < Minitest::Test
     assert_raises(RangeError) { b.adapt(pid, 1.0, -1) }
     assert_raises(NoMethodError) { b.adapt(Object.new, 1.0, 1) }
     assert_equal 0, pid.steps
-    [:stale, nil, 3, true].each do |answer|
+    [:stale, nil, 3r, true].each do |answer|
       odd = Object.new
       odd.define_singleton_method(:step) { |*| answer }
       assert_raises(answer == :stale ? RangeError : TypeError) { b.adapt(odd, 1.0, 1) }
     end
+    assert_equal 5, b.target
+  end
+
+  # A step answering an unknown Symbol hears the refusals; anything that is
+  # not a number names its real class.
+  def test_adapt_names_what_step_answered
+    b = Batch.new(5, 10)
+    not_a_number = 'step must answer a Float, an Integer or a refusal Symbol, not '
+    answers = [[:stale, RangeError, "step's refusal must be one of :not_finite, :invalid_duration, :overflow"],
+               [nil, TypeError, "#{not_a_number}NilClass"], [3r, TypeError, "#{not_a_number}Rational"]]
+    answers.each do |answer, kind, message|
+      odd = Object.new
+      odd.define_singleton_method(:step) { |*| answer }
+      assert_equal message, assert_raises(kind) { b.adapt(odd, 1.0, 1) }.message
+    end
+  end
+
+  # An Integer output is read as its nearest Float, as `retarget` reads one:
+  # truncated and clamped like any output; past Float::MAX it is infinite,
+  # which the core refuses as :not_finite.
+  def test_adapt_accepts_an_integer_step_answer
+    b = Batch.new(5, 10)
+    [[3, 3], [-7, 1], [2**70, 5]].each do |output, target|
+      whole = Object.new
+      whole.define_singleton_method(:step) { |*| output }
+      assert_equal target, b.adapt(whole, 1.0, 1)
+    end
+    huge = Object.new
+    huge.define_singleton_method(:step) { |*| 10**400 }
+    assert_equal :not_finite, b.adapt(huge, 1.0, 1)
     assert_equal 5, b.target
   end
 
