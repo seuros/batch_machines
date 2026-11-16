@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.4](https://github.com/seuros/batch_machines/compare/batch_machines/v0.5.3...batch_machines/v0.5.4) (2026-11-16)
+
+
+### Bug Fixes
+
+* accept every instant the gem returns ([728dbb6](https://github.com/seuros/batch_machines/commit/728dbb647498703a429da7c82de4533d27225ccf))
+
 ## [0.5.3](https://github.com/seuros/batch_machines/compare/batch_machines/v0.5.2...batch_machines/v0.5.3) (2026-11-16)
 
 
