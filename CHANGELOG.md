@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.3](https://github.com/seuros/batch_machines/compare/batch_machines/v0.5.2...batch_machines/v0.5.3) (2026-11-16)
+
+
+### Bug Fixes
+
+* fix wrapped classes at load so building a value runs no Ruby ([9030929](https://github.com/seuros/batch_machines/commit/9030929996bfe215a71b316254408db433b3a8f6))
+
 ## [0.5.2](https://github.com/seuros/batch_machines/compare/batch_machines/v0.5.1...batch_machines/v0.5.2) (2026-11-16)
 
 
