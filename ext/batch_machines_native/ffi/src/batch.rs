@@ -254,5 +254,7 @@ pub fn define(ruby: &Ruby, module: RModule) -> Result<(), Error> {
     class.define_method("pending", method!(Wrapper::pending, 0))?;
     class.define_method("pending_cost", method!(Wrapper::pending_cost, 0))?;
     class.define_method("target", method!(Wrapper::target, 0))?;
-    class.define_method("deadline", method!(Wrapper::deadline, 0))
+    class.define_method("deadline", method!(Wrapper::deadline, 0))?;
+    // `new` answers a Wrapper: fix its class now, so building one runs no Ruby.
+    Class::pin_wrapped::<Wrapper>(ruby, class).map(drop)
 }
