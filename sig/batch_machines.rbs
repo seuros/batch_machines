@@ -1,5 +1,8 @@
-# Time is Integer nanoseconds on a monotonic clock, instants and spans alike:
-# TypeError for a non-Integer, RangeError outside 0..2**64-1. Capacity and
+# Time is Integer nanoseconds on a monotonic clock: TypeError for a
+# non-Integer. Spans (max_wait, elapsed) raise RangeError outside
+# 0..2**64-1; instants (`now`) are read over the whole `Duration` range,
+# 0..Duration::MAX nanoseconds, so every `deadline` the batch answers reads
+# back as `now`, and raise RangeError outside it. Capacity and
 # cost are Integers in 1..2**32-1: TypeError for anything else, RangeError
 # outside the range. A frozen batch raises FrozenError on every mutating
 # call. Refusals are symbols, one per core `Refusal` variant; they never
@@ -9,7 +12,8 @@ module BatchMachines
 
   # The core's `Refusal`.
   # :time_regression, `now` is earlier than the latest observed instant.
-  # :overflow, a term of the controller's calculation is not finite.
+  # :overflow, `now + max_wait` does not fit a Duration (push), or a term of
+  # the controller's calculation is not finite (adapt).
   # :full, the item costs more than the capacity still unspent.
   # :not_finite, the error or output is NaN or infinite.
   # :invalid_duration, the elapsed time is zero.
@@ -49,15 +53,14 @@ module BatchMachines
     # answer is built: a raise while building it counts nothing; FrozenError
     # if building it froze the batch, RuntimeError if it changed the batch,
     # nothing applied in either case.
-    # Refused: :time_regression, :full. The core's third push refusal,
-    # `Overflow` (`now + max_wait` does not fit a Duration), cannot happen
-    # here: Integer nanoseconds stop at 2**64-1, far below that limit.
-    def push: (Integer now) -> (admission | :time_regression | :full)
+    # Refused: :time_regression, :full, :overflow (the item would start a
+    # batch and `now + max_wait` does not fit a Duration).
+    def push: (Integer now) -> (admission | :time_regression | :full | :overflow)
 
     # The core's `push_weighted(now, cost)`.
     # Honoured: :buffered or a Flush; the item is counted either way.
-    # Refused: :time_regression, :full (and never :overflow, as for `push`).
-    def push_weighted: (Integer now, Integer cost) -> (admission | :time_regression | :full)
+    # Refused: :time_regression, :full, :overflow, as for `push`.
+    def push_weighted: (Integer now, Integer cost) -> (admission | :time_regression | :full | :overflow)
 
     # The core's `poll(now)`. Honoured: :size or :deadline when a flush is
     # due, nil when nothing is due at this instant. Every honoured poll

@@ -226,8 +226,8 @@ batch.pending       # => 3
   | --- | --- | --- | --- |
   | `Flush.new(reason)` | a `Flush` | no clock | none; a symbol that is not `:size` or `:deadline` raises `RangeError`, a non-Symbol `TypeError` |
   | `Batch.new(capacity, max_wait)` | a `Batch` | no clock | none; a zero `max_wait` raises `RangeError` |
-  | `push(now)` | `:buffered` or a `Flush`; the item is counted either way | yes, every honoured answer | `:time_regression`, `:full` |
-  | `push_weighted(now, cost)` | `:buffered` or a `Flush`; the item is counted either way | yes, every honoured answer | `:time_regression`, `:full` |
+  | `push(now)` | `:buffered` or a `Flush`; the item is counted either way | yes, every honoured answer | `:time_regression`, `:full`, `:overflow` |
+  | `push_weighted(now, cost)` | `:buffered` or a `Flush`; the item is counted either way | yes, every honoured answer | `:time_regression`, `:full`, `:overflow` |
   | `poll(now)` | `:size` or `:deadline`, `nil` when nothing is due at this instant | yes, every honoured answer, `nil` included | `:time_regression` |
   | `flush(now)` | the items that were pending (Integer), `0` for an empty hold | yes when items left; `0` records nothing | `:time_regression` |
   | `adapt(pid, error, elapsed)` | the new target (Integer) | no, `elapsed` is a span | `:not_finite`, `:invalid_duration`, `:overflow` |
@@ -242,9 +242,9 @@ batch.pending       # => 3
 - **Time only moves forward.** `push`, `poll` and `flush` with a clock earlier than the last recorded one answer `:time_regression`. An answer records the clock when it depends on the clock: every honoured `push`, every honoured `poll` (a `nil` is "nothing due at this instant") and a `flush` that emptied the hold.
 - **Flushing an empty hold is honoured** and answers `0`. Do it twice, get `0` twice. That answer is true whatever the time, so it records nothing: an empty flush at a late clock does not turn an earlier push into a `:time_regression`.
 - **Capacity and cost are Integers** in `1...2**32`. Anything else is `TypeError`, zero or out of range is `RangeError`.
-- **Time is Integer nanoseconds** in `0...2**64`, instants and spans alike. Floats and strings raise `TypeError`, negative or too large raises `RangeError`. A zero `max_wait` raises `RangeError`: the first item would be late on arrival.
+- **Time is Integer nanoseconds.** Spans (`max_wait`, `elapsed`) are in `0...2**64`. Instants (`now`) run over the whole Rust `Duration` range, `0..Duration::MAX` nanoseconds (about `1.8e28`), so every `deadline` the batch answers, `now + max_wait` past `2**64` included, reads back as `now`. Floats and strings raise `TypeError`, negative or too large raises `RangeError`. A zero `max_wait` raises `RangeError`: the first item would be late on arrival.
 - **The controller is duck-typed.** `adapt` calls `pid.step(error, elapsed)` and expects a Float or one of `:not_finite`, `:invalid_duration`, `:overflow`, which it hands straight back to you. An Integer output is taken too, as its nearest Float (one past `Float::MAX` is infinite, so `:not_finite`); no `to_f` is called. Any other Symbol from `step` is a `RangeError`, anything that is neither a Float, an Integer nor a Symbol (a Rational included) a `TypeError` naming its class; an object without `step` is a `NoMethodError`. The error must be a number and `elapsed` an Integer in range, checked before the controller is touched. A refusing controller has not been stepped, so nothing changed on either side.
-- **The Rust core has one more push refusal**, `Overflow`, for a clock so late that the deadline doesn't fit. Integer nanoseconds run out long before that, so Ruby never sees it from a push.
+- **`:overflow` from a push** means the item would start a batch at a clock so late that `now + max_wait` doesn't fit a `Duration`. Nothing was counted.
 - **Frozen means frozen.** `freeze` the batch and `push`, `push_weighted`, `poll`, `flush`, `adapt`, and `retarget` all raise `FrozenError`, before any controller is stepped. A controller whose `step` freezes the batch has been stepped (the binding cannot undo your object); `adapt` then raises `FrozenError` and the target is where it was.
 - **No ids, nothing to restore.** The batch hands out no handles. After a restart, build a new one; it starts empty.
 

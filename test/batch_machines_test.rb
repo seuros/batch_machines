@@ -78,16 +78,35 @@ class BatchMachinesTest < Minitest::Test
     assert_nil b.poll(5)
   end
 
-  # The core's push refuses `Overflow` when `now + max_wait` does not fit a
-  # Duration. An Integer nanosecond instant tops out far below that, so no
-  # Ruby push can reach it: the latest instant plus the longest wait is fine.
-  def test_push_overflow_is_out_of_reach
+  DURATION_MAX = ((2**64) - 1) * 1_000_000_000 + 999_999_999
+
+  # Bug: the batch answered a deadline past 2**64-1 that poll and flush then
+  # refused to read back as `now`, raising RangeError.
+  def test_every_deadline_reads_back_as_now
+    b = Batch.new(2, 1)
+    assert_equal :buffered, b.push((1 << 64) - 1)
+    assert_equal 1 << 64, b.deadline
+    assert_equal :deadline, b.poll(b.deadline)
+    assert_equal DEADLINE, b.push(b.deadline)
+    assert_equal 2, b.flush(b.deadline)
     last = (2**64) - 1
     b = Batch.new(2, last)
     assert_equal :buffered, b.push(last)
     assert_equal 2 * last, b.deadline
-    assert_equal SIZE, b.push(last)
-    assert_equal 2, b.flush(last)
+    assert_equal :deadline, b.poll(b.deadline)
+  end
+
+  # The core's push refuses `Overflow` when `now + max_wait` does not fit a
+  # Duration; nothing is counted and the clock is not observed.
+  def test_push_overflow_changes_nothing
+    b = Batch.new(2, 1)
+    assert_equal :overflow, b.push(DURATION_MAX)
+    assert_equal :overflow, b.push_weighted(DURATION_MAX, 1)
+    assert_equal [0, 0, nil], [b.pending, b.pending_cost, b.deadline]
+    assert_equal :buffered, b.push(DURATION_MAX - 1)
+    assert_equal DURATION_MAX, b.deadline
+    assert_equal DEADLINE, b.push(DURATION_MAX) # the deadline is set: no sum
+    assert_equal 2, b.flush(DURATION_MAX)
   end
 
   def test_retarget_truncates_and_clamps
@@ -315,7 +334,11 @@ class BatchMachinesTest < Minitest::Test
       assert_raises(TypeError) { Batch.new(bad, 10) }
       assert_raises(TypeError) { Batch.new(10, bad) }
     end
-    [-1, 2**64].each { |bad| assert_raises(RangeError) { b.push(bad) } }
+    [-1, DURATION_MAX + 1].each do |bad|
+      %i[push poll flush].each { |m| assert_raises(RangeError) { b.public_send(m, bad) } }
+      assert_raises(RangeError) { b.push_weighted(bad, 1) }
+    end
+    [-1, 2**64].each { |bad| assert_raises(RangeError) { Batch.new(1, bad) } }
     [-1, 0, 2**32].each { |bad| assert_raises(RangeError) { b.push_weighted(0, bad) } }
     assert_equal 0, b.pending
   end

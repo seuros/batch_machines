@@ -4,7 +4,7 @@ use batch_machines::{Admission, Batch, FlushReason, Refusal};
 use magnus::{Error, RModule, Ruby, Symbol, Value, function, method, prelude::*, typed_data::Obj};
 use matryona_machines::ruby::{
     Class, Named, Refused, Registry, SymbolNames, SymbolOrReal, Symbols, class_name, duration,
-    keep, nanoseconds, positive, real, symbol_or_real_why,
+    instant, keep, nanoseconds, positive, real, symbol_or_real_why,
 };
 
 matryona_machines::symbols! {
@@ -120,7 +120,7 @@ impl Wrapper {
 
     fn push(ruby: &Ruby, this: Obj<Self>, now: Value) -> Result<Value, Error> {
         this.check_frozen()?;
-        let now = duration(now, "now")?;
+        let now = instant(now, "now")?;
         Self::admit(ruby, this, |batch| batch.push(now))
     }
 
@@ -131,13 +131,13 @@ impl Wrapper {
         cost: Value,
     ) -> Result<Value, Error> {
         this.check_frozen()?;
-        let (now, cost) = (duration(now, "now")?, positive(cost, "cost")?);
+        let (now, cost) = (instant(now, "now")?, positive(cost, "cost")?);
         Self::admit(ruby, this, |batch| batch.push_weighted(now, cost))
     }
 
     fn poll(ruby: &Ruby, this: Obj<Self>, now: Value) -> Result<Option<Value>, Error> {
         this.check_frozen()?;
-        let now = duration(now, "now")?;
+        let now = instant(now, "now")?;
         let answer = this.0.borrow_mut().poll(now);
         Ok(match answer {
             Ok(due) => due.map(|due| reason(ruby, due).as_value()),
@@ -159,7 +159,7 @@ impl Wrapper {
 
     fn flush(ruby: &Ruby, this: Obj<Self>, now: Value) -> Result<Value, Error> {
         this.check_frozen()?;
-        let now = duration(now, "now")?;
+        let now = instant(now, "now")?;
         Self::count(ruby, this, |batch| batch.flush(now))
     }
 
