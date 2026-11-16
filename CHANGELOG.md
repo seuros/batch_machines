@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.2](https://github.com/seuros/batch_machines/compare/batch_machines/v0.5.1...batch_machines/v0.5.2) (2026-11-16)
+
+
+### Features
+
+* accept an Integer controller output in Batch#adapt ([676da13](https://github.com/seuros/batch_machines/commit/676da134787cb86aa12156445eaec2fbce346cc5))
+
 ## [0.5.1](https://github.com/seuros/batch_machines/compare/batch_machines/v0.5.0...batch_machines/v0.5.1) (2026-11-14)
 
 
