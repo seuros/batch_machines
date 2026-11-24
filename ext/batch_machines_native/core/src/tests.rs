@@ -81,6 +81,30 @@ fn weighted_items_flush_at_the_cost_budget() {
 }
 
 #[test]
+fn bulk_unit_cost_admission_matches_individual_pushes() {
+    for (now, count, expected) in [(4, 2, BUFFERED), (4, 3, SIZE), (6, 3, DEADLINE)] {
+        let mut bulk = batch(4, 5);
+        assert_eq!(bulk.push(at(1)), BUFFERED);
+        let mut individual = bulk.clone();
+        let outcome = (0..count).map(|_| individual.push(at(now))).last();
+        assert_eq!(outcome, Some(expected));
+        assert_eq!(bulk.push_many(at(now), nz(count)), expected);
+        assert_eq!(bulk, individual);
+    }
+}
+
+#[test]
+fn bulk_admission_is_atomic_on_refusal() {
+    let mut batch = batch(4, 5);
+    assert_eq!(batch.push_many(at(1), nz(2)), BUFFERED);
+    refuses(&mut batch, Refusal::Full, |b| b.push_many(at(6), nz(3)));
+    refuses(&mut batch, Refusal::TimeRegression, |b| {
+        b.push_many(at(0), nz(1))
+    });
+    assert_eq!(batch.push_many(at(2), nz(2)), SIZE);
+}
+
+#[test]
 fn adapted_target_counts_cost_not_items() {
     let mut batch = batch(100, 10);
     let mut pid = pid(1000.0);

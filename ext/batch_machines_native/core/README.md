@@ -28,7 +28,7 @@ timer driver, payload storage, partial flush, or Ruby binding is included.
   | Call | Honoured | Records `now` | Refused |
   | --- | --- | --- | --- |
   | `Batch::new(capacity, max_wait)` | `Some(Batch)` | no clock | `None` for a zero `max_wait` (configuration) |
-  | `push(now)`, `push_weighted(now, cost)` | `Admission::Buffered`, `Admission::Flush(FlushReason)`; the item is counted either way | yes | `TimeRegression`, `Overflow`, `Full` |
+  | `push(now)`, `push_weighted(now, cost)`, `push_many(now, count)` | `Admission::Buffered`, `Admission::Flush(FlushReason)`; all submitted items are counted either way | yes | `TimeRegression`, `Overflow`, `Full` |
   | `poll(now)` | `Some(FlushReason)`, or `None` when nothing is due at this instant | yes, `None` included | `TimeRegression` |
   | `flush(now)` | the items that were pending, `0` for an empty batch | yes when items left; `0` records nothing | `TimeRegression` |
   | `adapt(pid, error, elapsed)` | the new target | no, `elapsed` is a span | `NotFinite`, `InvalidDuration`, `Overflow` |

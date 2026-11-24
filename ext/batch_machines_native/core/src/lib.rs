@@ -61,13 +61,23 @@ impl Batch {
     }
 
     /// Account one item of cost 1; the caller stores its payload only when
-    /// the push is honoured. Exactly `push_weighted(now, 1)`.
+    /// the push is honoured.
     ///
     /// # Errors
     ///
     /// As [`Self::push_weighted`].
     pub fn push(&mut self, now: Duration) -> Result<Admission, Refusal> {
-        self.push_weighted(now, NonZeroU32::MIN)
+        self.push_many(now, NonZeroU32::MIN)
+    }
+
+    /// Account `count` unit-cost items atomically, in constant time.
+    /// The caller stores all their payloads on success, or none on refusal.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::push_weighted`], with the count as the total cost.
+    pub fn push_many(&mut self, now: Duration, count: NonZeroU32) -> Result<Admission, Refusal> {
+        self.admit(now, count, count)
     }
 
     /// Account one item costing `cost` capacity units; the caller stores its
@@ -81,6 +91,15 @@ impl Batch {
     /// when `cost` exceeds the unspent capacity. Nothing changed: `now` is
     /// not observed.
     pub fn push_weighted(&mut self, now: Duration, cost: NonZeroU32) -> Result<Admission, Refusal> {
+        self.admit(now, NonZeroU32::MIN, cost)
+    }
+
+    fn admit(
+        &mut self,
+        now: Duration,
+        count: NonZeroU32,
+        cost: NonZeroU32,
+    ) -> Result<Admission, Refusal> {
         self.check(now)?;
         let deadline = match self.deadline {
             Some(deadline) => deadline,
@@ -103,7 +122,7 @@ impl Batch {
         }
         self.observed = now;
         // Each item holds at least one credit of a u32 capacity, so no wrap.
-        self.items += 1;
+        self.items += count.get();
         self.deadline = Some(deadline);
         Ok(self
             .reason(now)
