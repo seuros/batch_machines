@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.5](https://github.com/seuros/batch_machines/compare/batch_machines/v0.5.4...batch_machines/v0.5.5) (2026-11-24)
+
+
+### Features
+
+* admit batches of unit-cost items atomically ([a61d5c2](https://github.com/seuros/batch_machines/commit/a61d5c2f589ee38c2e033d2e259dda1a9b3b0af6))
+
 ## [0.5.4](https://github.com/seuros/batch_machines/compare/batch_machines/v0.5.3...batch_machines/v0.5.4) (2026-11-16)
 
 
